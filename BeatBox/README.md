@@ -23,11 +23,11 @@ At the heart of BeatBox stands our intelligent agent: **Nábia**.
 
 Nábia is a cybersecurity-driven AI with strong knowledge in:
 
-✔️ Web pentesting
-✔️ Network analysis
-✔️ System hardening
-✔️ Active and passive reconnaissance
-✔️ Exploitation & mitigation techniques
+* ✔️ Web pentesting
+* ✔️ Network analysis
+* ✔️ System hardening
+* ✔️ Active and passive reconnaissance
+* ✔️ Exploitation & mitigation techniques
 
 ### The twist?
 
