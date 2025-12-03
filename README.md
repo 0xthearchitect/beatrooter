@@ -1,10 +1,10 @@
 # BeatRooter - Cyber Investigation & Threat Mapping Tool
-To plant beets, you have to start with the root.
 
 <p align="center">
   <img src="Assets/beatrooter_logo.png" alt="logo"/>
 </p>
 
+To plant beets, you have to start with the root.
 
 ## 📋 Overview
 
