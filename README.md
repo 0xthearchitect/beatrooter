@@ -2,7 +2,7 @@
 To plant beets, you have to start with the root.
 
 <p align="center">
-  <img src="/Assets/beatRooter_logo.png" alt="logo"/>
+  <img src="Assets/beatrooter_logo.png" alt="logo"/>
 </p>
 
 
