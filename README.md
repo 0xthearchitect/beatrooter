@@ -47,8 +47,9 @@ To plant beets, you have to start with the root.
 ### Quick Start
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/beatrooter.git
-cd beatrooter
+git clone https://github.com/Samucahub/BeatRooter.git
+cd BeatRooter
+cd BeatRooter_Code
 
 # Install dependencies
 pip install -r requirements.txt
@@ -156,6 +157,6 @@ BeatRooter is released under the your MOM License.
 
 ## 🫦 Kiss for devs
 
-  <a href="https://github.com/Samucahub/NataBase/graphs/contributors">
-    <img src="https://contrib.rocks/image?repo=Samucahub/NataBase" />
+  <a href="https://github.com/Samucahub/BeatRooter/graphs/contributors">
+    <img src="https://contrib.rocks/image?repo=Samucahub/BeatRooter" />
   </a>
