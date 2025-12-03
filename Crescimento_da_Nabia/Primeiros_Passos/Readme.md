@@ -10,12 +10,30 @@ Usamos um modelo pequeno e mais fraquito, mas bastante eficaz. O que para nos po
 
 Em python:
 
-Usamos a biblioteca x, para mapeamento do html, inputs, buttons e jsons do site.
+Usamos a biblioteca *playwright*, para mapeamento do htmls, links, forms e scripts do site.
 
 Exemplo:
 ```python
+from playwright.sync_api import sync_playwright
+
+def crawl(url: str) -> dict:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        page = browser.new_page()
+        page.goto(url)
+
+        data = {
+            "url": url,
+            "html": page.content(),
+            "links": page.eval_on_selector_all("a", "els => els.map(e => e.href)"),
+            "forms": page.eval_on_selector_all("form", "els => els.map(e => e.outerHTML)"),
+            "scripts": page.eval_on_selector_all("script", "els => els.map(e => e.outerHTML)")
+        }
+
+        browser.close()
+        return data
 ```
 
 Modelo Ollama usado:
 
-Com aquilo que achamos anteriormente, entregamos ao modelo x para analisar e com um prompt personalizado entregar-nos exatamente aquilo que queriamos.
+Com aquilo que achamos anteriormente, entregamos ao modelo *qwen2.5-coder* para analisar e com um prompt personalizado entregar-nos exatamente aquilo que queriamos.
