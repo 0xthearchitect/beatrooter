@@ -3,15 +3,14 @@
 </p>
 
 <p align="center">
+  
+**To plant beets, you have to start with the root.**
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Custom-blue.svg" alt="License">
   </a>
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20WSL-lightgrey.svg" alt="Platform">
   <img src="https://img.shields.io/badge/python-3.8%2B-blue.svg" alt="Python">
 </p>
-
-**To plant beets, you have to start with the root.**
-
 > **BeatRooter** é uma plataforma visual de mapeamento e execução de ataques cibernéticos, desenvolvida para Red Team e Blue Team.
 
 ---
