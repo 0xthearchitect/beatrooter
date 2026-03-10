@@ -129,7 +129,7 @@ A trabalhar no instalador...
 ### Exemplo de uso
 
 <p align="center">
-  <img src="./assets/exemploAtaque.png" width="5000">
+  <img src="./Assets/exemploAtaque.png" width="5000">
 </p>
 
 ---
@@ -266,11 +266,10 @@ Esta ferramenta é fornecida "AS IS" para fins educacionais. Redistribuição ou
 
 ## Equipa de Desenvolvimento
 
-<div align="center">
-<a href="https://github.com/definitelynotrafa/ISTEC-Wargaming/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=definitelynotrafa/ISTEC-Wargaming" />
-</a>
-</div>
+
+<p align="center">
+  <img src="./Assets/dreamteam.png" width="5000">
+</p>
 
 ---
 
