@@ -4,7 +4,7 @@
 
 <p align="center">
   
-**To plant beets, you have to start with the root.**
+<h2>To plant beets, you have to start with the root.</h2>
 
   <a href="LICENSE">
     <img src="https://img.shields.io/badge/license-Custom-blue.svg" alt="License">
