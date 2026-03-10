@@ -33,7 +33,7 @@ BeatRooter é uma ferramenta completa de **ataque e defesa** que combina:
 
 1. [Funcionalidades Principais](#funcionalidades-principais)
 2. [Como Usar](#como-usar)
-3. [Casos de Uso](#-casos-de-uso)
+3. [Casos de Uso](#casos-de-uso)
 4. [Ferramentas Integradas](#ferramentas-integradas)
 6. [Contribuir](#contribuir)
 7. [Licença](#licen%C3%A7a)
