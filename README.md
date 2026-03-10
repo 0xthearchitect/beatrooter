@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  **To plant beets, you have to start with the root.**
+  <b>To plant beets, you have to start with the root.</b>
 </p>
 <p align="center">
   <a href="LICENSE">
