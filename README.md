@@ -275,7 +275,6 @@ Esta ferramenta é fornecida "AS IS" para fins educacionais. Redistribuição ou
 
 ## Agradecimentos
 
-- **ISTEC** - Instituto Superior de Tecnologias Avançadas
 - **Comunidade Open Source** - Autores das ferramentas integradas
 - **MITRE ATT&CK** - Framework de referência
 - **OWASP** - Metodologias de testing
