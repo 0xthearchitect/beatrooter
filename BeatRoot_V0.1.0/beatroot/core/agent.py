@@ -20,11 +20,8 @@ def run_assessment(
     model: str,
     llm_client: LLMClient | None = None,
     wordlist: str | None = None,
-<<<<<<< codex/implement-beatroot-agent-interaction-logic
     scenario_context: Any = None,
-=======
     scenario_context: str | None = None,
->>>>>>> dev
     scenario_only: bool = False,
     max_steps: int | None = None,
     custom_instruction: str | None = None,
@@ -53,11 +50,8 @@ def run_assessment(
         tool_registry=tool_registry,
         memory=memory,
         wordlist=wordlist,
-<<<<<<< codex/implement-beatroot-agent-interaction-logic
         scenario_context=normalized_scenario_context,
-=======
         scenario_context=scenario_context,
->>>>>>> dev
         scenario_only=scenario_only,
         max_steps=max_steps or config.agent.max_steps,
         custom_instruction=custom_instruction,
