@@ -21,6 +21,12 @@ class AgentConfig:
 
 
 @dataclass(slots=True)
+class ScenarioConfig:
+    enabled: bool = False
+    enforce_read_only_context: bool = True
+
+
+@dataclass(slots=True)
 class SafetyConfig:
     authorized_use_only: bool = True
     allow_generic_command_execution: bool = False
@@ -69,6 +75,7 @@ class AppConfig:
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     tool_defaults: ToolDefaultsConfig = field(default_factory=ToolDefaultsConfig)
+    scenario: ScenarioConfig = field(default_factory=ScenarioConfig)
 
     @classmethod
     def from_dict(cls, raw: dict) -> "AppConfig":
@@ -84,4 +91,5 @@ class AppConfig:
             logging=LoggingConfig(**raw.get("logging", {})),
             memory=MemoryConfig(**raw.get("memory", {})),
             tool_defaults=ToolDefaultsConfig(**raw.get("tool_defaults", {})),
+            scenario=ScenarioConfig(**raw.get("scenario", {})),
         )
