@@ -53,7 +53,6 @@ beatroot --target 192.168.1.10
 beatroot --target 192.168.1.10 --config config.yaml --wordlist /usr/share/wordlists/dirb/common.txt
 beatroot --target scanme.nmap.org --non-interactive --max-steps 3
 beatroot --target internal-lab --scenario-file scenario.json --scenario-only
-<<<<<<< codex/implement-beatroot-agent-interaction-logic
 beatroot --target internal-lab --scenario-json '{"nodes":[{"id":"web1","services":[{"port":443,"name":"https"}]}]}' --scenario-only
 cat scenario.json | beatroot --target internal-lab --scenario-stdin --scenario-only
 ```
@@ -84,8 +83,6 @@ result = run_assessment(
     scenario_context=graph_json_dict,  # dict/list/string accepted
     scenario_only=True,
 )
-=======
->>>>>>> dev
 ```
 
 ### Scenario-only integration (BeatRooter nodes)
