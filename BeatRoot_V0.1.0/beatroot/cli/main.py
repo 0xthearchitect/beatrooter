@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+<<<<<<< codex/implement-beatroot-agent-interaction-logic
+import sys
+=======
+>>>>>>> dev
 from pathlib import Path
 
 from beatroot.cli.console import Console
@@ -25,6 +30,8 @@ Examples:
   beatroot --target 10.10.11.234 --instruction "WordPress stack, focus on plugins"
   beatroot --target 10.10.11.234 --resume
   beatroot --target 10.10.11.234 --non-interactive --wordlist /usr/share/wordlists/dirb/common.txt
+  beatroot --target internal-lab --scenario-json '{"nodes":[{"id":"web1","port":443}]}' --scenario-only
+  cat scenario.json | beatroot --target internal-lab --scenario-stdin --scenario-only
         """,
     )
     parser.add_argument("-t", "--target", required=True, help="Target host, IP, or URL")
@@ -33,6 +40,15 @@ Examples:
     parser.add_argument("-c", "--config", help="Path to config YAML file")
     parser.add_argument("-w", "--wordlist", help="Wordlist path for web enumeration")
     parser.add_argument("--scenario-file", help="Path to a JSON/text file with scenario evidence")
+<<<<<<< codex/implement-beatroot-agent-interaction-logic
+    parser.add_argument("--scenario-json", help="Inline JSON scenario context from BeatRooter")
+    parser.add_argument(
+        "--scenario-stdin",
+        action="store_true",
+        help="Read scenario context from STDIN (for BeatRooter process piping)",
+    )
+=======
+>>>>>>> dev
     parser.add_argument(
         "--scenario-only",
         action="store_true",
@@ -126,6 +142,27 @@ def build_task(target: str, instruction: str | None) -> str:
     return base
 
 
+<<<<<<< codex/implement-beatroot-agent-interaction-logic
+def load_scenario_context(
+    path: str | None,
+    inline_json: str | None,
+    use_stdin: bool,
+) -> str | None:
+    if path:
+        scenario_path = Path(path)
+        if not scenario_path.exists():
+            raise FileNotFoundError(f"Scenario file not found: {path}")
+        return scenario_path.read_text(encoding="utf-8").strip() or None
+
+    if inline_json:
+        payload = json.loads(inline_json)
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+
+    if use_stdin:
+        return sys.stdin.read().strip() or None
+
+    return None
+=======
 def load_scenario_context(path: str | None) -> str | None:
     if not path:
         return None
@@ -133,6 +170,7 @@ def load_scenario_context(path: str | None) -> str | None:
     if not scenario_path.exists():
         raise FileNotFoundError(f"Scenario file not found: {path}")
     return scenario_path.read_text(encoding="utf-8").strip() or None
+>>>>>>> dev
 
 
 def resolve_resume_session(target: str, resume: bool, session_id: str | None) -> str | None:
@@ -207,8 +245,17 @@ def main() -> int:
 
     task = build_task(args.target, args.instruction)
     try:
+<<<<<<< codex/implement-beatroot-agent-interaction-logic
+        scenario_context = load_scenario_context(
+            args.scenario_file,
+            args.scenario_json,
+            args.scenario_stdin,
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+=======
         scenario_context = load_scenario_context(args.scenario_file)
     except OSError as exc:
+>>>>>>> dev
         console.error(str(exc))
         return 1
 
