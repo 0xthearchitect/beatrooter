@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+from pathlib import Path
 
 from beatroot.cli.console import Console
 from beatroot.config import load_config
@@ -31,6 +32,12 @@ Examples:
     parser.add_argument("-m", "--model", help="Override the configured model")
     parser.add_argument("-c", "--config", help="Path to config YAML file")
     parser.add_argument("-w", "--wordlist", help="Wordlist path for web enumeration")
+    parser.add_argument("--scenario-file", help="Path to a JSON/text file with scenario evidence")
+    parser.add_argument(
+        "--scenario-only",
+        action="store_true",
+        help="Disable tool execution and respond only from provided scenario evidence",
+    )
     parser.add_argument("--max-steps", type=int, help="Maximum agent steps")
     parser.add_argument(
         "-n",
@@ -119,6 +126,15 @@ def build_task(target: str, instruction: str | None) -> str:
     return base
 
 
+def load_scenario_context(path: str | None) -> str | None:
+    if not path:
+        return None
+    scenario_path = Path(path)
+    if not scenario_path.exists():
+        raise FileNotFoundError(f"Scenario file not found: {path}")
+    return scenario_path.read_text(encoding="utf-8").strip() or None
+
+
 def resolve_resume_session(target: str, resume: bool, session_id: str | None) -> str | None:
     if session_id:
         return session_id
@@ -190,6 +206,16 @@ def main() -> int:
         console.warn("No existing session found for this target; starting a new one.")
 
     task = build_task(args.target, args.instruction)
+    try:
+        scenario_context = load_scenario_context(args.scenario_file)
+    except OSError as exc:
+        console.error(str(exc))
+        return 1
+
+    scenario_only = args.scenario_only or config.scenario.enabled
+    if scenario_only and not scenario_context:
+        console.warn("Scenario-only mode enabled without scenario evidence; responses may be limited.")
+
     result = run_assessment(
         config=config,
         target=args.target,
@@ -197,6 +223,8 @@ def main() -> int:
         model=config.llm.model,
         llm_client=llm_client,
         wordlist=args.wordlist,
+        scenario_context=scenario_context,
+        scenario_only=scenario_only and config.scenario.enforce_read_only_context,
         max_steps=args.max_steps,
         custom_instruction=args.instruction,
         resume_session_id=resume_session_id,

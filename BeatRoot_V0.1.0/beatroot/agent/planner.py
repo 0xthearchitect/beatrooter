@@ -70,19 +70,29 @@ class Planner:
         self,
         target: str,
         wordlist: str | None = None,
+        scenario_context: str | None = None,
+        scenario_only: bool = False,
         custom_instruction: str | None = None,
     ) -> AgentPlan:
         if self.config.agent.allow_llm_planning and self.llm_client is not None:
             try:
-                return self._plan_with_llm(target, wordlist, custom_instruction)
+                return self._plan_with_llm(
+                    target,
+                    wordlist,
+                    scenario_context,
+                    scenario_only,
+                    custom_instruction,
+                )
             except (LLMError, ValueError, json.JSONDecodeError) as exc:
                 LOGGER.warning("Falling back to heuristic planning: %s", exc)
-        return self._heuristic_plan(target, wordlist)
+        return self._heuristic_plan(target, wordlist, scenario_context, scenario_only)
 
     def _plan_with_llm(
         self,
         target: str,
         wordlist: str | None,
+        scenario_context: str | None,
+        scenario_only: bool,
         custom_instruction: str | None,
     ) -> AgentPlan:
         prompt = build_planning_prompt(
@@ -90,6 +100,8 @@ class Planner:
             memory_summary=self.memory.summarize(),
             available_tools=self.tool_registry.available_tools(),
             wordlist=wordlist,
+            scenario_context=scenario_context,
+            scenario_only=scenario_only,
             custom_instruction=custom_instruction,
         )
         response_text = self.llm_client.complete(SYSTEM_PROMPT, prompt)
@@ -109,7 +121,28 @@ class Planner:
             source="llm",
         )
 
-    def _heuristic_plan(self, target: str, wordlist: str | None) -> AgentPlan:
+    def _heuristic_plan(
+        self,
+        target: str,
+        wordlist: str | None,
+        scenario_context: str | None,
+        scenario_only: bool,
+    ) -> AgentPlan:
+        if scenario_only:
+            return AgentPlan(
+                summary="Scenario mode is active with command execution disabled.",
+                reasoning="Use only the provided scenario evidence and ask the operator for more context when evidence is missing.",
+                action=AgentAction(
+                    type="ask_user",
+                    message=(
+                        "Read-only scenario mode active. Share more scenario details "
+                        "or disable scenario-only mode to allow tool execution."
+                    ),
+                    risk="low",
+                ),
+                source="heuristic",
+            )
+
         if not any(command["tool"] == "nmap" for command in self.memory.commands):
             return AgentPlan(
                 summary="No reconnaissance data is available yet.",

@@ -18,6 +18,7 @@ This implementation is intentionally safety-bounded:
 - Persistent JSON session memory
 - Interactive CLI loop with reasoning, next-step suggestions, and action logging
 - Plugin-ready tool registry architecture
+- Scenario-only mode to answer from prebuilt environment evidence without running tools
 
 ## Install
 
@@ -51,7 +52,17 @@ model:
 beatroot --target 192.168.1.10
 beatroot --target 192.168.1.10 --config config.yaml --wordlist /usr/share/wordlists/dirb/common.txt
 beatroot --target scanme.nmap.org --non-interactive --max-steps 3
+beatroot --target internal-lab --scenario-file scenario.json --scenario-only
 ```
+
+### Scenario-only integration (BeatRooter nodes)
+
+If you already have a scenario graph in BeatRooter and want BeatRoot to only reason over that data:
+
+1. Export the node context (hosts, services, paths, notes, findings) to a JSON or text file.
+2. Run BeatRoot with `--scenario-file <file>` and `--scenario-only`.
+3. In this mode BeatRoot receives the scenario as evidence and blocks command execution (`nmap`, `ffuf`, `gobuster`, etc).
+4. To allow mixed behavior, omit `--scenario-only` and keep `--scenario-file` so the model can still use the scenario as additional context.
 
 ## Project Layout
 

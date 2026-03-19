@@ -64,6 +64,8 @@ class PlanningAgentBackend(AgentBackend):
         tool_registry: ToolRegistry,
         memory: SessionMemory,
         wordlist: str | None = None,
+        scenario_context: str | None = None,
+        scenario_only: bool = False,
         max_steps: int = 6,
         custom_instruction: str | None = None,
         approval_callback: Callable[[str, list[str], str], bool] | None = None,
@@ -72,6 +74,8 @@ class PlanningAgentBackend(AgentBackend):
         self.tool_registry = tool_registry
         self.memory = memory
         self.wordlist = wordlist
+        self.scenario_context = scenario_context
+        self.scenario_only = scenario_only
         self.max_steps = max_steps
         self.custom_instruction = custom_instruction
         self.approval_callback = approval_callback
@@ -102,6 +106,8 @@ class PlanningAgentBackend(AgentBackend):
             plan = self.planner.plan(
                 target=self.memory.target,
                 wordlist=self.wordlist,
+                scenario_context=self.scenario_context,
+                scenario_only=self.scenario_only,
                 custom_instruction=instruction,
             )
             text = (
@@ -143,6 +149,17 @@ class PlanningAgentBackend(AgentBackend):
                 yield AgentMessage(
                     type=MessageType.ERROR,
                     content=f"Unsupported action: {plan.action.type}",
+                )
+                return
+
+            if self.scenario_only:
+                yield AgentMessage(
+                    type=MessageType.RESULT,
+                    content={
+                        "success": True,
+                        "status": "paused",
+                        "reason": "Scenario-only mode blocks all command execution.",
+                    },
                 )
                 return
 
