@@ -18,6 +18,7 @@ This implementation is intentionally safety-bounded:
 - Persistent JSON session memory
 - Interactive CLI loop with reasoning, next-step suggestions, and action logging
 - Plugin-ready tool registry architecture
+- Scenario-only mode to answer from prebuilt environment evidence without running tools
 
 ## Install
 
@@ -51,6 +52,37 @@ model:
 beatroot --target 192.168.1.10
 beatroot --target 192.168.1.10 --config config.yaml --wordlist /usr/share/wordlists/dirb/common.txt
 beatroot --target scanme.nmap.org --non-interactive --max-steps 3
+beatroot --target internal-lab --scenario-file scenario.json --scenario-only
+beatroot --target internal-lab --scenario-json '{"nodes":[{"id":"web1","services":[{"port":443,"name":"https"}]}]}' --scenario-only
+cat scenario.json | beatroot --target internal-lab --scenario-stdin --scenario-only
+```
+
+### Scenario-only integration (BeatRooter nodes)
+
+If you already have a scenario graph in BeatRooter and want BeatRoot to only reason over that data:
+
+1. Export the node context (hosts, services, paths, notes, findings) to a JSON or text file.
+2. Run BeatRoot with `--scenario-file <file>` and `--scenario-only`.
+3. In this mode BeatRoot receives the scenario as evidence and blocks command execution (`nmap`, `ffuf`, `gobuster`, etc).
+4. To allow mixed behavior, omit `--scenario-only` and keep `--scenario-file` so the model can still use the scenario as additional context.
+
+You can also avoid files completely by sending JSON directly:
+
+- CLI inline payload: `--scenario-json '{...}'`
+- CLI pipe mode: `--scenario-stdin` (read from stdin)
+- Programmatic integration from BeatRooter Python code:
+
+```python
+from beatroot.core import run_assessment
+
+result = run_assessment(
+    config=config,
+    target="internal-lab",
+    task="Analyze this in-scope environment graph.",
+    model=config.llm.model,
+    scenario_context=graph_json_dict,  # dict/list/string accepted
+    scenario_only=True,
+)
 ```
 
 ## Project Layout

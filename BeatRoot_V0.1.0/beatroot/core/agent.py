@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
 from beatroot.agent.planner import Planner
 from beatroot.config.models import AppConfig
@@ -9,6 +9,7 @@ from beatroot.core.controller import AgentController, load_memory_for_session
 from beatroot.core.session import SessionStore
 from beatroot.llm.base import LLMClient
 from beatroot.memory import SessionMemory
+from beatroot.scenario import normalize_scenario_context
 from beatroot.tools.registry import build_tool_registry
 
 
@@ -19,6 +20,8 @@ def run_assessment(
     model: str,
     llm_client: LLMClient | None = None,
     wordlist: str | None = None,
+    scenario_context: Any = None,
+    scenario_only: bool = False,
     max_steps: int | None = None,
     custom_instruction: str | None = None,
     resume_session_id: str | None = None,
@@ -26,6 +29,7 @@ def run_assessment(
     approval_callback: Callable[[str, list[str], str], bool] | None = None,
 ) -> dict:
     session_store = SessionStore()
+    normalized_scenario_context = normalize_scenario_context(scenario_context)
     memory: SessionMemory
     if resume_session_id:
         memory = load_memory_for_session(config, target, resume_session_id)
@@ -45,6 +49,8 @@ def run_assessment(
         tool_registry=tool_registry,
         memory=memory,
         wordlist=wordlist,
+        scenario_context=normalized_scenario_context,
+        scenario_only=scenario_only,
         max_steps=max_steps or config.agent.max_steps,
         custom_instruction=custom_instruction,
         approval_callback=approval_callback,

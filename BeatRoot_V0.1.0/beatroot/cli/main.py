@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
+import sys
+from pathlib import Path
 
 from beatroot.cli.console import Console
 from beatroot.config import load_config
@@ -24,6 +27,8 @@ Examples:
   beatroot --target 10.10.11.234 --instruction "WordPress stack, focus on plugins"
   beatroot --target 10.10.11.234 --resume
   beatroot --target 10.10.11.234 --non-interactive --wordlist /usr/share/wordlists/dirb/common.txt
+  beatroot --target internal-lab --scenario-json '{"nodes":[{"id":"web1","port":443}]}' --scenario-only
+  cat scenario.json | beatroot --target internal-lab --scenario-stdin --scenario-only
         """,
     )
     parser.add_argument("-t", "--target", required=True, help="Target host, IP, or URL")
@@ -31,6 +36,18 @@ Examples:
     parser.add_argument("-m", "--model", help="Override the configured model")
     parser.add_argument("-c", "--config", help="Path to config YAML file")
     parser.add_argument("-w", "--wordlist", help="Wordlist path for web enumeration")
+    parser.add_argument("--scenario-file", help="Path to a JSON/text file with scenario evidence")
+    parser.add_argument("--scenario-json", help="Inline JSON scenario context from BeatRooter")
+    parser.add_argument(
+        "--scenario-stdin",
+        action="store_true",
+        help="Read scenario context from STDIN (for BeatRooter process piping)",
+    )
+    parser.add_argument(
+        "--scenario-only",
+        action="store_true",
+        help="Disable tool execution and respond only from provided scenario evidence",
+    )
     parser.add_argument("--max-steps", type=int, help="Maximum agent steps")
     parser.add_argument(
         "-n",
@@ -119,6 +136,27 @@ def build_task(target: str, instruction: str | None) -> str:
     return base
 
 
+def load_scenario_context(
+    path: str | None,
+    inline_json: str | None,
+    use_stdin: bool,
+) -> str | None:
+    if path:
+        scenario_path = Path(path)
+        if not scenario_path.exists():
+            raise FileNotFoundError(f"Scenario file not found: {path}")
+        return scenario_path.read_text(encoding="utf-8").strip() or None
+
+    if inline_json:
+        payload = json.loads(inline_json)
+        return json.dumps(payload, indent=2, ensure_ascii=False)
+
+    if use_stdin:
+        return sys.stdin.read().strip() or None
+
+    return None
+
+
 def resolve_resume_session(target: str, resume: bool, session_id: str | None) -> str | None:
     if session_id:
         return session_id
@@ -190,6 +228,20 @@ def main() -> int:
         console.warn("No existing session found for this target; starting a new one.")
 
     task = build_task(args.target, args.instruction)
+    try:
+        scenario_context = load_scenario_context(
+            args.scenario_file,
+            args.scenario_json,
+            args.scenario_stdin,
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        console.error(str(exc))
+        return 1
+
+    scenario_only = args.scenario_only or config.scenario.enabled
+    if scenario_only and not scenario_context:
+        console.warn("Scenario-only mode enabled without scenario evidence; responses may be limited.")
+
     result = run_assessment(
         config=config,
         target=args.target,
@@ -197,6 +249,8 @@ def main() -> int:
         model=config.llm.model,
         llm_client=llm_client,
         wordlist=args.wordlist,
+        scenario_context=scenario_context,
+        scenario_only=scenario_only and config.scenario.enforce_read_only_context,
         max_steps=args.max_steps,
         custom_instruction=args.instruction,
         resume_session_id=resume_session_id,
