@@ -25,15 +25,15 @@ class ManualResultItem(QFrame):
         self.setFrameStyle(QFrame.Shape.Box)
         self.setStyleSheet("""
             QFrame {
-                background-color: #3e3e3e;
-                border: 1px solid #5a5a5a;
+                background-color: #101c2d;
+                border: 1px solid #2f4666;
                 border-radius: 8px;
                 padding: 12px;
                 margin: 4px;
             }
             QFrame:hover {
-                background-color: #4a4a4a;
-                border: 1px solid #a855f7;
+                background-color: #142338;
+                border: 1px solid #4f77a9;
             }
         """)
         
@@ -46,7 +46,7 @@ class ManualResultItem(QFrame):
         title_label.setWordWrap(True)
         title_label.setStyleSheet("""
             QLabel {
-                color: #e0e0e0;
+                color: #d6e4f7;
                 font-size: 13px;
                 font-weight: 600;
                 background: transparent;
@@ -62,7 +62,7 @@ class ManualResultItem(QFrame):
         source_label = QLabel(f"Source: {self.manual_data['source']}")
         source_label.setStyleSheet("""
             QLabel {
-                color: #a855f7;
+                color: #75a3de;
                 font-size: 11px;
                 background: transparent;
                 border: none;
@@ -73,7 +73,7 @@ class ManualResultItem(QFrame):
         pages_label = QLabel(f"Pages: {self.manual_data['pages']}")
         pages_label.setStyleSheet("""
             QLabel {
-                color: #b0b0b0;
+                color: #90a6c6;
                 font-size: 11px;
                 background: transparent;
                 border: none;
@@ -84,7 +84,7 @@ class ManualResultItem(QFrame):
         type_label = QLabel(f"Type: {self.manual_data['type']}")
         type_label.setStyleSheet("""
             QLabel {
-                color: #b0b0b0;
+                color: #90a6c6;
                 font-size: 11px;
                 background: transparent;
                 border: none;
@@ -124,16 +124,17 @@ class ManualResultItem(QFrame):
             view_app_btn = QPushButton("View in App")
             view_app_btn.setStyleSheet("""
                 QPushButton {
-                    background-color: #a855f7;
-                    color: #ffffff;
-                    border: 1px solid #a855f7;
+                    background-color: #22456f;
+                    color: #dbe8fa;
+                    border: 1px solid #4f77a9;
                     border-radius: 5px;
                     padding: 6px 12px;
                     font-size: 11px;
                     font-weight: 600;
                 }
                 QPushButton:hover {
-                    background-color: #c084fc;
+                    background-color: #2a5588;
+                    border: 1px solid #6e9ad3;
                 }
             """)
             view_app_btn.clicked.connect(lambda: self.pdf_view_requested.emit(self.manual_data['url']))
@@ -142,17 +143,17 @@ class ManualResultItem(QFrame):
         view_btn = QPushButton("View Online")
         view_btn.setStyleSheet("""
             QPushButton {
-                background-color: #5a5a5a;
-                color: #e0e0e0;
-                border: 1px solid #707070;
+                background-color: #17253b;
+                color: #d0dced;
+                border: 1px solid #2f4666;
                 border-radius: 5px;
                 padding: 6px 12px;
                 font-size: 11px;
                 font-weight: 600;
             }
             QPushButton:hover {
-                background-color: #707070;
-                border: 1px solid #a855f7;
+                background-color: #213550;
+                border: 1px solid #4f77a9;
             }
         """)
         view_btn.clicked.connect(lambda: self.view_requested.emit(self.manual_data['url']))
@@ -163,17 +164,17 @@ class ManualResultItem(QFrame):
             download_btn = QPushButton("Download")
             download_btn.setStyleSheet("""
                 QPushButton {
-                    background-color: #5a5a5a;
-                    color: #e0e0e0;
-                    border: 1px solid #707070;
+                    background-color: #17253b;
+                    color: #d0dced;
+                    border: 1px solid #2f4666;
                     border-radius: 5px;
                     padding: 6px 12px;
                     font-size: 11px;
                     font-weight: 600;
                 }
                 QPushButton:hover {
-                    background-color: #707070;
-                    border: 1px solid #a855f7;
+                    background-color: #213550;
+                    border: 1px solid #4f77a9;
                 }
             """)
             download_btn.clicked.connect(lambda: self.download_requested.emit(self.manual_data))
@@ -211,11 +212,11 @@ class BeatHelperDialog(QDialog):
         
         title_label = QLabel("BeatHelper - Manual Finder")
         title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        title_label.setFont(QFont("Consolas", 18, QFont.Weight.Bold))
         
         subtitle_label = QLabel("Search and download product manuals from the web")
         subtitle_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        subtitle_label.setFont(QFont("Arial", 11))
+        subtitle_label.setFont(QFont("Consolas", 10))
         
         header_layout.addWidget(title_label)
         header_layout.addWidget(subtitle_label)
@@ -314,71 +315,72 @@ class BeatHelperDialog(QDialog):
     def apply_styles(self):
         self.setStyleSheet("""
             QDialog {
-                background-color: #2e2e2e;
-                color: #e0e0e0;
+                background-color: #0f1a2b;
+                color: #d0dced;
             }
             QGroupBox {
-                color: #a855f7;
+                color: #78a9e8;
                 font-weight: bold;
                 font-size: 13px;
-                border: 1px solid #5a5a5a;
+                border: 1px solid #2f4666;
                 border-radius: 8px;
                 margin-top: 12px;
                 padding-top: 12px;
-                background-color: #3e3e3e;
+                background-color: #111f33;
             }
             QGroupBox::title {
                 subcontrol-origin: margin;
                 left: 12px;
                 padding: 0 8px;
-                background-color: #3e3e3e;
+                background-color: #111f33;
             }
             QLineEdit {
-                background-color: #4a4a4a;
-                color: #e0e0e0;
-                border: 1px solid #5a5a5a;
+                background-color: #12233a;
+                color: #d0dced;
+                border: 1px solid #2f4666;
                 border-radius: 6px;
                 padding: 10px;
                 font-size: 12px;
             }
             QLineEdit:focus {
-                border: 1px solid #a855f7;
-                background-color: #545454;
+                border: 1px solid #4f77a9;
+                background-color: #162a45;
             }
             QPushButton {
-                background-color: #a855f7;
-                color: #ffffff;
-                border: none;
+                background-color: #17253b;
+                color: #d0dced;
+                border: 1px solid #2f4666;
                 border-radius: 6px;
                 padding: 10px 20px;
                 font-size: 12px;
                 font-weight: 600;
             }
             QPushButton:hover {
-                background-color: #c084fc;
+                background-color: #213550;
+                border: 1px solid #4f77a9;
             }
             QPushButton:pressed {
-                background-color: #9333ea;
+                background-color: #192d45;
             }
             QLabel {
-                color: #e0e0e0;
+                color: #d0dced;
                 background: transparent;
             }
             QProgressBar {
-                border: 1px solid #5a5a5a;
+                border: 1px solid #2f4666;
                 border-radius: 5px;
                 text-align: center;
-                background-color: #4a4a4a;
-                color: #e0e0e0;
+                background-color: #12233a;
+                color: #d0dced;
             }
             QProgressBar::chunk {
-                background-color: #a855f7;
+                background-color: #2a5b94;
                 border-radius: 4px;
             }
             QScrollArea {
-                border: 1px solid #5a5a5a;
+                border: 1px solid #2f4666;
                 border-radius: 6px;
-                background-color: #2e2e2e;
+                background-color: #0f1a2b;
             }
         """)
     
@@ -399,7 +401,7 @@ class BeatHelperDialog(QDialog):
         self.search_btn.setEnabled(False)
         self.search_input.setEnabled(False)
         self.status_label.setText("Searching for manuals...")
-        self.status_label.setStyleSheet("color: #89b4fa;")
+        self.status_label.setStyleSheet("color: #78a9e8;")
         
         # Start search thread
         self.search_thread = ManualSearchThread(query)
@@ -417,7 +419,7 @@ class BeatHelperDialog(QDialog):
         
         if results:
             self.status_label.setText(f"Found {len(results)} manual(s)")
-            self.status_label.setStyleSheet("color: #50fa7b;")
+            self.status_label.setStyleSheet("color: #76c893;")
             
             # Display results
             for manual_data in results:
@@ -500,7 +502,7 @@ class BeatHelperDialog(QDialog):
     
     def on_download_complete(self, file_path):
         self.progress_label.setText(f"Download complete!")
-        self.progress_label.setStyleSheet("color: #50fa7b;")
+        self.progress_label.setStyleSheet("color: #76c893;")
         
         # Hide progress
         from PyQt6.QtCore import QTimer
@@ -540,7 +542,7 @@ class BeatHelperDialog(QDialog):
     
     def on_download_status(self, status):
         self.progress_label.setText(status)
-        self.progress_label.setStyleSheet("color: #89b4fa;")
+        self.progress_label.setStyleSheet("color: #78a9e8;")
     
     def view_online(self, url):
         """Open manual URL in browser"""

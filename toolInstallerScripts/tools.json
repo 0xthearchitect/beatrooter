@@ -1,0 +1,200 @@
+{
+	"exiftool": {
+		"name": "ExifTool",
+		"script": "exiftool.sh",
+		"check_command": "exiftool",
+		"install_option": "1",
+		"remove_option": "3"
+	},
+	"gobuster": {
+		"name": "GoBuster",
+		"script": "gobuster.sh",
+		"check_command": "gobuster",
+		"install_option": "1",
+		"remove_option": "3"
+	},
+	"nmap": {
+		"name": "Nmap",
+		"script": "nmap.sh",
+		"check_command": "nmap",
+		"install_option": "1",
+		"remove_option": "3"
+	},
+	"dnsutils": {
+		"name": "DNS Utils (nslookup/dig)",
+		"script": "dnsutils.sh",
+		"check_command": [
+			"nslookup",
+			"dig"
+		],
+		"install_option": "1",
+		"remove_option": "2"
+	},
+	"sublist3r": {
+		"name": "Sublist3r",
+		"script": "sublist3r.sh",
+		"check_command": "sublist3r",
+		"special_path": "/opt/Sublist3r",
+		"install_option": "1",
+		"remove_option": "3"
+	},
+	"whois": {
+		"name": "Whois",
+		"script": "whois.sh",
+		"check_command": "whois",
+		"install_option": "1",
+		"remove_option": "2"
+	},
+	"sqlmap": {
+		"name": "SQLmap",
+		"script": "sqlmap.sh",
+		"check_command": "sqlmap",
+		"install_option": "1",
+		"remove_option": "3",
+		"special_path": "/opt/sqlmap"
+	},
+	"whatweb": {
+		"name": "WhatWeb",
+		"script": "whatweb.sh",
+		"check_command": "whatweb",
+		"install_option": "1",
+		"remove_option": "3",
+		"special_path": "/opt/whatweb"
+	},
+	"wifite": {
+		"name": "Wifite",
+		"script": "wifite.sh",
+		"check_command": "wifite",
+		"install_option": "1",
+		"remove_option": "3",
+		"special_path": "/opt/wifite"
+	},
+	"tshark": {
+		"name": "TShark",
+		"script": "tshark.sh",
+		"check_command": "tshark",
+		"install_option": "1",
+		"remove_option": "3",
+		"special_path": "/opt/wireshark"
+	},
+	"searchsploit": {
+		"name": "Searchsploit",
+		"script": "searchsploit.sh",
+		"check_command": "searchsploit",
+		"install_option": "1",
+		"remove_option": "3",
+		"special_path": "/opt/exploitdb"
+	},
+	"linpeas": {
+		"name": "LinPEAS",
+		"script": "linpeas.sh",
+		"check_command": "linpeas",
+		"install_option": "1",
+		"remove_option": "3",
+		"special_path": "/opt/linpeas"
+	},
+	"ghidra": {
+		"name": "Ghidra",
+		"script": "ghidra.sh",
+		"check_command": "ghidra",
+		"install_option": "1",
+		"remove_option": "2",
+		"special_path": "/opt/ghidra"
+	},
+	"enum4linux": {
+		"name": "Enum4linux",
+		"script": "enum4linux.sh",
+		"check_command": "enum4linux",
+		"install_option": "1",
+		"remove_option": "3"
+	},
+	"hydra": {
+		"name": "Hydra",
+		"script": "hydra.sh",
+		"check_command": "hydra",
+		"install_option": "1",
+		"remove_option": "3"
+	},
+	"hashcat": {
+		"name": "Hashcat",
+		"script": "hashcat.sh",
+		"check_command": "hashcat",
+		"install_option": "1",
+		"remove_option": "3"
+	},
+	"john": {
+		"name": "John the Ripper",
+		"script": "john.sh",
+		"check_command": "john",
+		"install_option": "1",
+		"remove_option": "3"
+	},
+	"netcat": {
+		"name": "Netcat",
+		"script": "netcat.sh",
+		"check_command": ["nc", "netcat"],
+		"install_option": "1",
+		"remove_option": "2"
+	},
+	"binwalk": {
+		"name": "Binwalk",
+		"script": "binwalk.sh",
+		"check_command": "binwalk",
+		"install_option": "1",
+		"remove_option": "3",
+		"special_path": "/opt/binwalk"
+	},
+	"strings": {
+		"name": "Strings (binutils)",
+		"script": "strings.sh",
+		"check_command": "strings",
+		"install_option": "1",
+		"remove_option": "2"
+	},
+	"rockyou": {
+		"name": "RockYou Wordlist",
+		"script": "rockyou.sh",
+		"check_command": "rockyou",
+		"special_path": "/usr/share/wordlists/rockyou.txt",
+		"install_option": "1",
+		"remove_option": "2"
+	},
+	"rpcclient": {
+		"name": "RPCClient",
+		"script": "rpcclient.sh",
+		"check_command": "rpcclient",
+		"install_option": "1",
+		"remove_option": "2"
+	},
+	"patator": {
+		"name": "Patator",
+		"script": "patator.sh",
+		"check_command": "patator",
+		"install_option": "1",
+		"remove_option": "3",
+		"special_path": "/opt/patator"
+	},
+	"revshellgen": {
+		"name": "RevShellGen",
+		"script": "revshellgen.sh",
+		"check_command": "revshellgen",
+		"install_option": "1",
+		"remove_option": "2",
+		"special_path": "/opt/revshellgen"
+	},
+	"cupp": {
+		"name": "CUPP",
+		"script": "cupp.sh",
+		"check_command": "cupp",
+		"install_option": "1",
+		"remove_option": "2",
+		"special_path": "/opt/cupp"
+	},
+	"steghide": {
+		"name": "Steghide",
+		"script": "steghide.sh",
+		"check_command": "steghide",
+		"install_option": "1",
+		"remove_option": "2"
+	}
+}

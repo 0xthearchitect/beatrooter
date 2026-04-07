@@ -28,81 +28,64 @@ def get_resource_path(relative_path, resource_type='assets'):
     try:
         print(f"[DEBUG PATH] Procurando: '{relative_path}', tipo: '{resource_type}'")
         path_logger.debug(f"Procurando recurso: {relative_path}, tipo: {resource_type}")
-        
+        normalized = relative_path.replace('\\', '/').lstrip('/')
+
         if hasattr(sys, '_MEIPASS'):
-            base_path = Path(sys._MEIPASS)
-            path_logger.info(f"Executável PyInstaller detectado. MEIPASS: {base_path}")
-
-            try:
-                if base_path.exists():
-                    items = list(base_path.glob("*"))
-                    path_logger.debug(f"Conteúdo do diretório base ({len(items)} itens):")
-                    for item in items[:10]:
-                        path_logger.debug(f"  - {item.name} ({'dir' if item.is_dir() else 'file'})")
-            except Exception as e:
-                path_logger.debug(f"Não foi possível listar diretório base: {e}")
-            
-            possible_paths = []
-            
-            possible_paths.append(base_path / relative_path)
-
-            possible_paths.append(base_path / resource_type / relative_path)
-            
-            if relative_path.startswith('assets/'):
-                possible_paths.append(base_path / relative_path[7:])
-
-            if relative_path.startswith('animations/'):
-                possible_paths.append(base_path / relative_path[11:])
-
-            if '/' in relative_path or '\\' in relative_path:
-                parts = relative_path.replace('\\', '/').split('/')
-                if len(parts) > 1:
-                    possible_paths.append(base_path / parts[-1])
-            
-            path_logger.debug(f"Tentando {len(possible_paths)} caminhos possíveis")
-            
-            for i, path in enumerate(possible_paths):
-                path_logger.debug(f"  [{i}] {path}")
-                if path.exists():
-                    path_logger.info(f"✓ Encontrado em: {path}")
-                    print(f"[DEBUG EXE] Encontrado: {path}")
-                    return str(path)
-            
-            path_logger.warning(f"Nenhum caminho funcionou para: {relative_path}")
-            print(f"[DEBUG EXE] Nenhum caminho funcionou para: {relative_path}")
-            
-            return str(possible_paths[0] if possible_paths else base_path / relative_path)
-            
+            base_dirs = [Path(sys._MEIPASS)]
+            path_logger.info(f"Executável PyInstaller detectado. MEIPASS: {base_dirs[0]}")
+            debug_prefix = "[DEBUG EXE]"
         else:
-            base_dir = Path(__file__).parent.parent
-            path_logger.info(f"Modo desenvolvimento. Diretório base: {base_dir}")
+            base_dir = Path(__file__).resolve().parent.parent
+            # Some development layouts keep assets one level above the package dir.
+            base_dirs = [base_dir, base_dir.parent]
+            path_logger.info(f"Modo desenvolvimento. Diretórios base: {base_dirs}")
+            debug_prefix = "[DEBUG DEV]"
 
-            possible_paths = []
-            
-            possible_paths.append(base_dir / "assets" / relative_path)
+        possible_paths = []
+        for base in base_dirs:
+            possible_paths.append(base / normalized)
+            possible_paths.append(base / resource_type / normalized)
+            possible_paths.append(base / "assets" / normalized)
 
-            possible_paths.append(base_dir / relative_path)
-            
-            if relative_path.startswith('assets/'):
-                possible_paths.append(base_dir / relative_path)
-            
-            possible_paths.append(base_dir / resource_type / relative_path)
-            
-            path_logger.debug(f"Tentando {len(possible_paths)} caminhos possíveis no dev")
-            
-            for i, path in enumerate(possible_paths):
-                path_logger.debug(f"  [{i}] {path}")
-                if path.exists():
-                    path_logger.info(f"✓ Encontrado em: {path}")
-                    print(f"[DEBUG DEV] Encontrado: {path}")
-                    return str(path)
-            
-            path_logger.warning(f"Nenhum caminho funcionou no dev para: {relative_path}")
-            print(f"[DEBUG DEV] Nenhum caminho funcionou para: {relative_path}")
+            if normalized.startswith("assets/"):
+                possible_paths.append(base / normalized[7:])
+            if normalized.startswith("animations/"):
+                possible_paths.append(base / normalized[11:])
+            if "/" in normalized:
+                possible_paths.append(base / normalized.split("/")[-1])
 
-            last_path = possible_paths[0] if possible_paths else base_dir / "assets" / relative_path
-            last_path.parent.mkdir(parents=True, exist_ok=True)
-            return str(last_path)
+        # Explicit fallbacks for common renamed branding assets.
+        alias_map = {
+            "icons/app_icon.png": ["beatrooter_logo.svg", "icons/app_icon.ico"],
+            "small logo.png": ["beatrooter_logo.svg"],
+        }
+        for alias in alias_map.get(normalized, []):
+            for base in base_dirs:
+                possible_paths.append(base / "assets" / alias)
+                possible_paths.append(base / alias)
+
+        unique_paths = []
+        seen = set()
+        for path in possible_paths:
+            path_str = str(path)
+            if path_str in seen:
+                continue
+            seen.add(path_str)
+            unique_paths.append(path)
+
+        path_logger.debug(f"Tentando {len(unique_paths)} caminhos possíveis")
+        for i, path in enumerate(unique_paths):
+            path_logger.debug(f"  [{i}] {path}")
+            if path.exists():
+                path_logger.info(f"✓ Encontrado em: {path}")
+                print(f"{debug_prefix} Encontrado: {path}")
+                return str(path)
+
+        path_logger.warning(f"Nenhum caminho funcionou para: {relative_path}")
+        print(f"{debug_prefix} Nenhum caminho funcionou para: {relative_path}")
+        if unique_paths:
+            return str(unique_paths[0])
+        return str(base_dirs[0] / resource_type / normalized)
                 
     except Exception as e:
         error_msg = f"[ERROR] Falha ao obter caminho: {relative_path}, erro: {e}"

@@ -14,10 +14,12 @@ from ui.sandbox.sandbox_canvas_widget import SandboxCanvasWidget
 from ui.sandbox.sandbox_toolbox import SandboxToolbox
 from ui.sandbox.sandbox_detail_panel import SandboxDetailPanel
 from ui.sandbox.web_workspace_widget import WebWorkspaceWidget
+from ui.sandbox.os_workspace_widget import OSWorkspaceWidget
+from ui.sandbox.network_workspace_widget import NetworkWorkspaceWidget
 from core.storage_manager import StorageManager
 from core.theme_manager import ThemeManager
 from models.object_model import ObjectCategory, ObjectType
-from tools.docker_integration import DockerAutomationManager
+from features.tools.docker.docker_integration import DockerAutomationManager
 from utils.path_utils import get_resource_path
 
 class SandboxMainWindow(QMainWindow):
@@ -30,18 +32,20 @@ class SandboxMainWindow(QMainWindow):
         self.storage_manager = StorageManager()
         self.current_theme = 'cyber_modern'
         self.object_widgets = {}
-        self.web_mode = self.is_web_category(category)
+        self.project_type = project_type
+        self.category = category
+        self.template_data = template_data
+        self.workspace_mode = self.get_workspace_mode(category)
+        self.web_mode = self.workspace_mode == 'web'
         self.web_workspace = None
+        self.os_workspace = None
+        self.network_workspace = None
         self.toolbox = None
         self.canvas_widget = None
         self.detail_panel = None
         self.toolbar = None
         self.object_menu = None
         self._skip_close_confirmation = False
-        
-        self.project_type = project_type
-        self.category = category
-        self.template_data = template_data
 
         self.setWindowIcon(QIcon(get_resource_path("icons/app_icon.png", 'assets')))
         self.setup_ui()
@@ -65,6 +69,40 @@ class SandboxMainWindow(QMainWindow):
     def is_web_category(category):
         return category in {'web_technologies', 'web_architecture', 'web_apps', 'docker_projects'}
 
+    @staticmethod
+    def is_os_category(category):
+        return category in {'operating_systems', 'operative_system', 'os_analysis'}
+
+    @staticmethod
+    def is_network_category(category):
+        return category in {'network_devices', 'network_topology'}
+
+    @classmethod
+    def get_workspace_mode(cls, category):
+        if cls.is_web_category(category):
+            return 'web'
+        if cls.is_os_category(category):
+            return 'os'
+        if cls.is_network_category(category):
+            return 'network'
+        return 'legacy'
+
+    def refresh_workspace_mode(self):
+        self.workspace_mode = self.get_workspace_mode(self.category)
+        self.web_mode = self.workspace_mode == 'web'
+
+    def is_canvas_mode(self):
+        return self.workspace_mode == 'legacy'
+
+    def get_active_workspace(self):
+        if self.workspace_mode == 'web':
+            return self.web_workspace
+        if self.workspace_mode == 'os':
+            return self.os_workspace
+        if self.workspace_mode == 'network':
+            return self.network_workspace
+        return None
+
     def setup_ui(self):
         self.setWindowTitle("BeatRooter Sandbox")
         self.setGeometry(100, 100, 1400, 900)
@@ -76,9 +114,15 @@ class SandboxMainWindow(QMainWindow):
         main_layout.setContentsMargins(0, 0, 0, 0)
         main_layout.setSpacing(0)
 
-        if self.web_mode:
+        if self.workspace_mode == 'web':
             self.web_workspace = WebWorkspaceWidget(self)
             main_layout.addWidget(self.web_workspace)
+        elif self.workspace_mode == 'os':
+            self.os_workspace = OSWorkspaceWidget(self)
+            main_layout.addWidget(self.os_workspace)
+        elif self.workspace_mode == 'network':
+            self.network_workspace = NetworkWorkspaceWidget(self)
+            main_layout.addWidget(self.network_workspace)
         else:
             splitter = QSplitter(Qt.Orientation.Horizontal)
 
@@ -133,7 +177,7 @@ class SandboxMainWindow(QMainWindow):
         save_as_action.triggered.connect(self.save_sandbox_as)
         file_menu.addAction(save_as_action)
 
-        open_folder_label = 'Open Project Folder...' if self.web_mode else 'Import Project Folder...'
+        open_folder_label = 'Open Project Folder...' if self.workspace_mode == 'web' else 'Import Project Folder...'
         self.open_folder_action = QAction(open_folder_label, self)
         self.open_folder_action.triggered.connect(self.import_project_folder)
         file_menu.addAction(self.open_folder_action)
@@ -212,7 +256,7 @@ class SandboxMainWindow(QMainWindow):
         align_right_action = QAction('Align Right', self)
         align_right_action.triggered.connect(lambda: self.align_objects('right'))
         align_menu.addAction(align_right_action)
-        self.object_menu.menuAction().setVisible(not self.web_mode)
+        self.object_menu.menuAction().setVisible(self.is_canvas_mode())
 
         self.analyse_menu = menubar.addMenu('Analyse My System')
         self.analyse_menu.setVisible(False)
@@ -260,7 +304,7 @@ class SandboxMainWindow(QMainWindow):
         save_action.triggered.connect(self.save_sandbox)
         self.toolbar.addAction(save_action)
         
-        if self.web_mode:
+        if self.workspace_mode == 'web':
             open_folder_action = QAction('Open Folder', self)
             open_folder_action.triggered.connect(self.import_project_folder)
             self.toolbar.addAction(open_folder_action)
@@ -306,7 +350,7 @@ class SandboxMainWindow(QMainWindow):
         print("Botão 'Start Attack' adicionado com sucesso!")
 
     def launch_security_attack(self):
-        from agent.attack_dialog import AttackDialog
+        from features.tools.agents.attack_dialog import AttackDialog
 
         if not self.is_docker_environment_running():
             QMessageBox.warning(self, "Aviso", 
@@ -336,7 +380,7 @@ class SandboxMainWindow(QMainWindow):
         
         print(f"Sandbox carregado com {len(sandbox_data.get('objects', []))} objetos")
         
-        from tools.docker_automation import DockerAutomationDialog
+        from features.tools.docker.docker_automation import DockerAutomationDialog
         dialog = DockerAutomationDialog(sandbox_data, self)
         dialog.exec()
     
@@ -352,15 +396,20 @@ class SandboxMainWindow(QMainWindow):
 
     def update_menu_visibility(self):
         print(f"DEBUG: Current category = {self.category}")
-        self.web_mode = self.is_web_category(self.category)
+        self.refresh_workspace_mode()
         if self.object_menu:
-            self.object_menu.menuAction().setVisible(not self.web_mode)
+            self.object_menu.menuAction().setVisible(self.is_canvas_mode())
+        if hasattr(self, 'open_folder_action') and self.open_folder_action:
+            self.open_folder_action.setVisible(self.workspace_mode in {'web', 'legacy'})
+            self.open_folder_action.setText(
+                'Open Project Folder...' if self.workspace_mode == 'web' else 'Import Project Folder...'
+            )
         
-        if self.category in ['operating_systems', 'operative_system', 'os_analysis']:
+        if self.workspace_mode == 'os':
             print("DEBUG: Operating System category - Showing Analyse, Hiding Docker")
             self.analyse_menu.menuAction().setVisible(True)
             self.docker_menu.menuAction().setVisible(False)
-        elif self.category in ['web_technologies', 'web_architecture', 'web_apps', 'docker_projects']:
+        elif self.workspace_mode == 'web':
             print("DEBUG: Web Technology category - Hiding Analyse, Showing Docker")
             self.analyse_menu.menuAction().setVisible(False)
             self.docker_menu.menuAction().setVisible(True)
@@ -403,13 +452,19 @@ class SandboxMainWindow(QMainWindow):
         return mapping.get(category_str, None)
 
     def setup_connections(self):
-        if self.web_mode and self.web_workspace:
+        active_workspace = self.get_active_workspace()
+        if active_workspace and hasattr(active_workspace, 'status_message'):
+            active_workspace.status_message.connect(self.statusBar().showMessage)
+
+        if self.workspace_mode == 'web' and self.web_workspace:
             self.web_workspace.folder_loaded.connect(
                 lambda path: self.statusBar().showMessage(f"Opened project folder: {path}")
             )
             self.web_workspace.file_opened.connect(
                 lambda path: self.statusBar().showMessage(f"Opened file: {os.path.basename(path)}")
             )
+            return
+        if self.workspace_mode in {'os', 'network'}:
             return
 
         self.toolbox.object_created.connect(self.create_object)
@@ -517,8 +572,8 @@ class SandboxMainWindow(QMainWindow):
             self.statusBar().showMessage(f"Parent-child relationship failed: {e}")
 
     def undo(self):
-        if self.web_mode:
-            self.statusBar().showMessage("Undo is not available in Web workspace mode.")
+        if not self.is_canvas_mode():
+            self.statusBar().showMessage("Undo is not available in this workspace mode.")
             return
         if self.sandbox_manager.undo():
             self.refresh_canvas_from_environment()
@@ -526,8 +581,8 @@ class SandboxMainWindow(QMainWindow):
             self.statusBar().showMessage("Undo: " + self.sandbox_manager.history[self.sandbox_manager.history_position]['description'])
     
     def redo(self):
-        if self.web_mode:
-            self.statusBar().showMessage("Redo is not available in Web workspace mode.")
+        if not self.is_canvas_mode():
+            self.statusBar().showMessage("Redo is not available in this workspace mode.")
             return
         if self.sandbox_manager.redo():
             self.refresh_canvas_from_environment()
@@ -535,7 +590,7 @@ class SandboxMainWindow(QMainWindow):
             self.statusBar().showMessage("Redo: " + self.sandbox_manager.history[self.sandbox_manager.history_position]['description'])
     
     def update_undo_redo_buttons(self):
-        if self.web_mode:
+        if not self.is_canvas_mode():
             if hasattr(self, 'undo_action'):
                 self.undo_action.setEnabled(False)
             if hasattr(self, 'redo_action'):
@@ -552,7 +607,7 @@ class SandboxMainWindow(QMainWindow):
                 action.setEnabled(self.sandbox_manager.can_redo())
 
     def refresh_canvas_from_environment(self):
-        if self.web_mode or not self.canvas_widget:
+        if not self.is_canvas_mode() or not self.canvas_widget:
             return
         self.canvas_widget.scene.clear()
         self.object_widgets.clear()
@@ -595,10 +650,17 @@ class SandboxMainWindow(QMainWindow):
             self.statusBar().showMessage(f"Deleted {obj.object_type.value} object")
 
     def import_project_folder(self):
-        if self.web_mode and self.web_workspace:
+        if self.workspace_mode == 'web' and self.web_workspace:
             folder_path = self.web_workspace.open_project_folder_dialog()
             if folder_path:
                 self.statusBar().showMessage(f"Project folder loaded: {os.path.basename(folder_path)}")
+            return
+        if not self.is_canvas_mode():
+            QMessageBox.information(
+                self,
+                "Not Available",
+                "Folder import is only available for the Web workspace or legacy canvas mode.",
+            )
             return
 
         folder_path = QFileDialog.getExistingDirectory(
@@ -795,9 +857,9 @@ class SandboxMainWindow(QMainWindow):
         
         if category_dialog.exec() == QDialog.DialogCode.Accepted:
             selected_category = category_dialog.selected_category
-            selected_is_web = self.is_web_category(selected_category)
+            selected_mode = self.get_workspace_mode(selected_category)
 
-            if selected_is_web != self.web_mode:
+            if selected_mode != self.workspace_mode:
                 replacement_window = SandboxMainWindow(self.project_type, selected_category, self.template_data)
                 replacement_window.show()
                 self._skip_close_confirmation = True
@@ -807,11 +869,12 @@ class SandboxMainWindow(QMainWindow):
             self.category = selected_category
             self.update_menu_visibility()
 
-            if self.web_mode:
-                if self.web_workspace:
-                    self.web_workspace.reset_workspace()
+            active_workspace = self.get_active_workspace()
+            if active_workspace:
+                if hasattr(active_workspace, 'reset_workspace'):
+                    active_workspace.reset_workspace()
                 self.storage_manager.current_file = None
-                self.statusBar().showMessage("New web workspace ready. Open a project folder to start.")
+                self.statusBar().showMessage(f"New {selected_category.replace('_', ' ')} workspace ready.")
                 return
 
             self.sandbox_manager.clear_environment()
@@ -828,12 +891,12 @@ class SandboxMainWindow(QMainWindow):
             self.statusBar().showMessage(f"New {selected_category.replace('_', ' ')} sandbox created")
 
     def start_connection(self, source_widget):
-        if self.web_mode or not self.canvas_widget:
+        if not self.is_canvas_mode() or not self.canvas_widget:
             return
         self.canvas_widget.start_connection(source_widget)
 
     def start_parent_child(self, parent_widget):
-        if self.web_mode or not self.canvas_widget:
+        if not self.is_canvas_mode() or not self.canvas_widget:
             return
         self.canvas_widget.start_parent_child(parent_widget)
 
@@ -881,12 +944,13 @@ class SandboxMainWindow(QMainWindow):
             self.statusBar().showMessage(f"Parent-child relationship failed: {e}")
 
     def has_unsaved_changes(self):
-        if self.web_mode and self.web_workspace:
-            return self.web_workspace.has_unsaved_changes()
+        active_workspace = self.get_active_workspace()
+        if active_workspace and hasattr(active_workspace, 'has_unsaved_changes'):
+            return active_workspace.has_unsaved_changes()
         return len(self.sandbox_manager.environment.objects) > 0
 
     def save_sandbox(self):
-        if self.web_mode and self.web_workspace:
+        if self.workspace_mode == 'web' and self.web_workspace:
             if not self.web_workspace.current_file_path:
                 QMessageBox.information(
                     self,
@@ -908,7 +972,7 @@ class SandboxMainWindow(QMainWindow):
             self.save_sandbox_as()
 
     def save_sandbox_as(self):
-        if self.web_mode:
+        if self.workspace_mode == 'web':
             QMessageBox.information(
                 self,
                 "Save As Not Available",
@@ -937,18 +1001,33 @@ class SandboxMainWindow(QMainWindow):
             import json
             from datetime import datetime
             
-            self.sandbox_manager.environment.metadata['modified'] = datetime.now().isoformat()
-            if not self.sandbox_manager.environment.metadata.get('created'):
-                self.sandbox_manager.environment.metadata['created'] = datetime.now().isoformat()
-            
-            if self.category:
-                self.sandbox_manager.environment.metadata['category'] = self.category
-            
-            data = self.sandbox_manager.environment.to_dict()
+            if self.is_canvas_mode():
+                self.sandbox_manager.environment.metadata['modified'] = datetime.now().isoformat()
+                if not self.sandbox_manager.environment.metadata.get('created'):
+                    self.sandbox_manager.environment.metadata['created'] = datetime.now().isoformat()
+                
+                if self.category:
+                    self.sandbox_manager.environment.metadata['category'] = self.category
+                
+                data = self.sandbox_manager.environment.to_dict()
 
-            print(f"DEBUG: Saving to {filename}")
-            print(f"DEBUG - Objects to save: {len(data.get('objects', []))}")
-            print(f"DEBUG - Connections to save: {len(data.get('connections', []))}")
+                print(f"DEBUG: Saving to {filename}")
+                print(f"DEBUG - Objects to save: {len(data.get('objects', []))}")
+                print(f"DEBUG - Connections to save: {len(data.get('connections', []))}")
+            else:
+                active_workspace = self.get_active_workspace()
+                if not active_workspace or not hasattr(active_workspace, 'to_dict'):
+                    raise ValueError("Current workspace does not support serialization")
+
+                data = {
+                    'metadata': {
+                        'created': datetime.now().isoformat(),
+                        'modified': datetime.now().isoformat(),
+                        'category': self.category,
+                        'workspace_mode': self.workspace_mode,
+                    },
+                    'workspace_state': active_workspace.to_dict(),
+                }
             
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
@@ -965,7 +1044,7 @@ class SandboxMainWindow(QMainWindow):
         self.update_menu_visibility()
 
     def open_sandbox(self):
-        if self.web_mode:
+        if self.workspace_mode == 'web':
             self.import_project_folder()
             return
 
@@ -984,38 +1063,73 @@ class SandboxMainWindow(QMainWindow):
     def load_environment_from_file(self, filename):
         try:
             import json
-            
+
             print(f"DEBUG: Loading from {filename}")
-            
+
             with open(filename, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-            
-            print(f"DEBUG: File loaded - Objects: {len(data.get('objects', []))}, Connections: {len(data.get('connections', []))}")
-            
-            from models.object_model import SandboxEnvironment
-            environment = SandboxEnvironment.from_dict(data)
-            
-            self.sandbox_manager.environment = environment
-            self.storage_manager.current_file = filename
-            
-            if 'metadata' in data and 'category' in data['metadata']:
-                self.category = data['metadata']['category']
-                self.update_menu_visibility()
-            
-            self.refresh_canvas_from_environment()
-            
+
+            self.load_data_bundle(data, filename)
             print(f"DEBUG: Environment loaded successfully")
-            
+
         except Exception as e:
             print(f"DEBUG: Load error: {e}")
             raise Exception(f"Failed to load environment: {e}")
 
+    def load_data_bundle(self, data, filename=None):
+        metadata = data.get('metadata', {}) if isinstance(data, dict) else {}
+        loaded_category = metadata.get('category', self.category)
+        loaded_mode = self.get_workspace_mode(loaded_category)
+
+        if loaded_mode != self.workspace_mode:
+            replacement_window = SandboxMainWindow(self.project_type, loaded_category, self.template_data)
+            replacement_window.show()
+            replacement_window.load_data_bundle(data, filename)
+            self._skip_close_confirmation = True
+            self.close()
+            return
+
+        self.category = loaded_category
+        self.update_menu_visibility()
+        self.storage_manager.current_file = filename
+
+        if not self.is_canvas_mode():
+            active_workspace = self.get_active_workspace()
+            workspace_state = data.get('workspace_state', {})
+
+            if workspace_state and active_workspace and hasattr(active_workspace, 'load_state'):
+                active_workspace.load_state(workspace_state)
+                return
+
+            if data.get('objects'):
+                from models.object_model import SandboxEnvironment
+
+                environment = SandboxEnvironment.from_dict(data)
+                if self.workspace_mode == 'os' and self.os_workspace:
+                    self.os_workspace.load_analysis_results(list(environment.objects.values()))
+                    return
+                if self.workspace_mode == 'network' and self.network_workspace:
+                    self.network_workspace.load_legacy_topology(
+                        list(environment.objects.values()),
+                        list(environment.connections.values()),
+                    )
+                    return
+            return
+
+        print(f"DEBUG: File loaded - Objects: {len(data.get('objects', []))}, Connections: {len(data.get('connections', []))}")
+
+        from models.object_model import SandboxEnvironment
+        environment = SandboxEnvironment.from_dict(data)
+
+        self.sandbox_manager.environment = environment
+        self.refresh_canvas_from_environment()
+
     def export_png(self):
-        if self.web_mode:
+        if not self.is_canvas_mode():
             QMessageBox.information(
                 self,
                 "Export Not Available",
-                "PNG export is only available in object/canvas mode.",
+                "PNG export is only available in legacy object/canvas mode.",
             )
             return
 
@@ -1035,11 +1149,11 @@ class SandboxMainWindow(QMainWindow):
                 self.statusBar().showMessage("PNG export failed")
 
     def export_json(self):
-        if self.web_mode:
+        if self.workspace_mode == 'web':
             QMessageBox.information(
                 self,
                 "Export Not Available",
-                "JSON export is only available in object/canvas mode.",
+                "JSON export is not available in the Web workspace.",
             )
             return
 
@@ -1061,28 +1175,31 @@ class SandboxMainWindow(QMainWindow):
         self.statusBar().showMessage(f"Applied {theme_name} theme")
 
     def zoom_in(self):
-        if self.web_mode and self.web_workspace:
-            self.web_workspace.zoom_in()
+        active_workspace = self.get_active_workspace()
+        if active_workspace and hasattr(active_workspace, 'zoom_in'):
+            active_workspace.zoom_in()
             return
         if self.canvas_widget:
             self.canvas_widget.scale(1.2, 1.2)
     
     def zoom_out(self):
-        if self.web_mode and self.web_workspace:
-            self.web_workspace.zoom_out()
+        active_workspace = self.get_active_workspace()
+        if active_workspace and hasattr(active_workspace, 'zoom_out'):
+            active_workspace.zoom_out()
             return
         if self.canvas_widget:
             self.canvas_widget.scale(0.8, 0.8)
     
     def reset_zoom(self):
-        if self.web_mode and self.web_workspace:
-            self.web_workspace.reset_zoom()
+        active_workspace = self.get_active_workspace()
+        if active_workspace and hasattr(active_workspace, 'reset_zoom'):
+            active_workspace.reset_zoom()
             return
         if self.canvas_widget:
             self.canvas_widget.resetTransform()
 
     def group_selected_objects(self):
-        if self.web_mode or not self.canvas_widget:
+        if not self.is_canvas_mode() or not self.canvas_widget:
             return
         selected_objects = [item for item in self.canvas_widget.scene.selectedItems() 
                           if hasattr(item, 'object')]
@@ -1094,7 +1211,7 @@ class SandboxMainWindow(QMainWindow):
         self.statusBar().showMessage(f"Grouped {len(selected_objects)} objects")
 
     def ungroup_selected_objects(self):
-        if self.web_mode or not self.canvas_widget:
+        if not self.is_canvas_mode() or not self.canvas_widget:
             return
         selected_objects = [item for item in self.canvas_widget.scene.selectedItems() 
                           if hasattr(item, 'object')]
@@ -1106,7 +1223,7 @@ class SandboxMainWindow(QMainWindow):
         self.statusBar().showMessage("Ungrouped objects")
 
     def align_objects(self, alignment):
-        if self.web_mode or not self.canvas_widget:
+        if not self.is_canvas_mode() or not self.canvas_widget:
             return
         selected_objects = [item for item in self.canvas_widget.scene.selectedItems() 
                           if hasattr(item, 'object')]
@@ -1136,7 +1253,7 @@ class SandboxMainWindow(QMainWindow):
             self.start_system_analysis("full")
 
     def start_system_analysis(self, analysis_type):
-        from tools.system_analyzer import SystemAnalysisThread
+        from features.tools.parsers.system_analyzer import SystemAnalysisThread
         
         self.progress_dialog = QProgressDialog("Analyzing system...", "Cancel", 0, 100, self)
         self.progress_dialog.setWindowTitle("System Analysis")
@@ -1174,10 +1291,21 @@ class SandboxMainWindow(QMainWindow):
         
         print(f"DEBUG: Analysis found {len(objects_to_create)} objects")
         
-        from tools.system_analyzer_filters import SystemAnalysisFilter
+        from features.tools.parsers.system_analyzer_filters import SystemAnalysisFilter
         filtered_objects = SystemAnalysisFilter.filter_essential_components(objects_to_create, max_objects=25)
         
         print(f"DEBUG: After filtering: {len(filtered_objects)} objects")
+
+        if self.workspace_mode == 'os' and self.os_workspace:
+            self.os_workspace.load_analysis_results(filtered_objects)
+            QMessageBox.information(
+                self,
+                "Analysis Complete",
+                "System analysis completed successfully.\n\n"
+                f"Imported {len(filtered_objects)} essential components into the OS VM Lab.\n\n"
+                "You can now refine services, snapshots, and filesystem artifacts inside the new workspace.",
+            )
+            return
 
         categorized_objects = self.categorize_objects_for_display(filtered_objects)
         

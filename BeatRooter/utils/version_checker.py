@@ -48,7 +48,8 @@ def check_version_freshness():
 
 
 class VersionChecker:
-    
+    CURRENT_VERSION = CURRENT_VERSION
+
     # Cache settings
     CACHE_DURATION_HOURS = 24
     

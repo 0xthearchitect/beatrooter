@@ -1,2 +1,0 @@
-[console_scripts]
-beatroot = beatroot.interface.main:main

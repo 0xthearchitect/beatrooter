@@ -1,2 +1,0 @@
-"""BeatRoot interface package."""
-

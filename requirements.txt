@@ -1,0 +1,21 @@
+# GUI Framework
+PyQt6
+PyQt6-WebEngine
+
+# Image Processing
+Pillow
+
+# PDF Generation
+reportlab
+
+# Web Automation and Scraping
+selenium
+webdriver-manager
+requests
+beautifulsoup4
+
+# Docker Integration
+docker
+
+# Data Handling
+python-dateutil
