@@ -16,6 +16,8 @@ from features.sandbox.ui.sandbox_detail_panel import SandboxDetailPanel
 from features.sandbox.ui.web_workspace_widget import WebWorkspaceWidget
 from features.sandbox.ui.os_workspace_widget import OSWorkspaceWidget
 from features.sandbox.ui.network_workspace_widget import NetworkWorkspaceWidget
+from features.sandbox.ui.redo_action import RedoActionHandler
+from features.sandbox.ui.undo_action import UndoActionHandler
 from features.beatroot_canvas.core import StorageManager, ThemeManager
 from models.object_model import ObjectCategory, ObjectType
 from features.tools.docker.docker_integration import DockerAutomationManager
@@ -45,6 +47,8 @@ class SandboxMainWindow(QMainWindow):
         self.toolbar = None
         self.object_menu = None
         self._skip_close_confirmation = False
+        self.undo_handler = UndoActionHandler(self)
+        self.redo_handler = RedoActionHandler(self)
 
         self.setWindowIcon(QIcon(get_resource_path("icons/app_icon.png", 'assets')))
         self.setup_ui()
@@ -56,7 +60,8 @@ class SandboxMainWindow(QMainWindow):
         self.update_menu_visibility()
         
         self.statusBar().showMessage(f"Ready - {self.get_project_title()}")
-        self.sandbox_manager.save_state("Initial state")
+        self.sandbox_manager.reset_history("Initial state")
+        self.update_undo_redo_buttons()
 
     def get_project_title(self):
         if self.project_type and self.category:
@@ -183,16 +188,10 @@ class SandboxMainWindow(QMainWindow):
         
         file_menu.addSeparator()
 
-        self.undo_action = QAction('Undo', self)
-        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        self.undo_action.triggered.connect(self.undo)
-        self.undo_action.setEnabled(False)
+        self.undo_action = self.undo_handler.create_action(self, include_shortcut=True)
         file_menu.addAction(self.undo_action)
         
-        self.redo_action = QAction('Redo', self)
-        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        self.redo_action.triggered.connect(self.redo)
-        self.redo_action.setEnabled(False)
+        self.redo_action = self.redo_handler.create_action(self, include_shortcut=True)
         file_menu.addAction(self.redo_action)
         
         file_menu.addSeparator()
@@ -310,15 +309,11 @@ class SandboxMainWindow(QMainWindow):
         
         self.toolbar.addSeparator()
 
-        undo_toolbar_action = QAction('Undo', self)
-        undo_toolbar_action.triggered.connect(self.undo)
-        undo_toolbar_action.setEnabled(False)
-        self.toolbar.addAction(undo_toolbar_action)
+        self.undo_toolbar_action = self.undo_handler.create_action(self)
+        self.toolbar.addAction(self.undo_toolbar_action)
         
-        redo_toolbar_action = QAction('Redo', self)
-        redo_toolbar_action.triggered.connect(self.redo)
-        redo_toolbar_action.setEnabled(False)
-        self.toolbar.addAction(redo_toolbar_action)
+        self.redo_toolbar_action = self.redo_handler.create_action(self)
+        self.toolbar.addAction(self.redo_toolbar_action)
         
         self.toolbar.addSeparator()
         
@@ -571,39 +566,14 @@ class SandboxMainWindow(QMainWindow):
             self.statusBar().showMessage(f"Parent-child relationship failed: {e}")
 
     def undo(self):
-        if not self.is_canvas_mode():
-            self.statusBar().showMessage("Undo is not available in this workspace mode.")
-            return
-        if self.sandbox_manager.undo():
-            self.refresh_canvas_from_environment()
-            self.update_undo_redo_buttons()
-            self.statusBar().showMessage("Undo: " + self.sandbox_manager.history[self.sandbox_manager.history_position]['description'])
+        self.undo_handler.trigger()
     
     def redo(self):
-        if not self.is_canvas_mode():
-            self.statusBar().showMessage("Redo is not available in this workspace mode.")
-            return
-        if self.sandbox_manager.redo():
-            self.refresh_canvas_from_environment()
-            self.update_undo_redo_buttons()
-            self.statusBar().showMessage("Redo: " + self.sandbox_manager.history[self.sandbox_manager.history_position]['description'])
+        self.redo_handler.trigger()
     
     def update_undo_redo_buttons(self):
-        if not self.is_canvas_mode():
-            if hasattr(self, 'undo_action'):
-                self.undo_action.setEnabled(False)
-            if hasattr(self, 'redo_action'):
-                self.redo_action.setEnabled(False)
-            return
-
-        self.undo_action.setEnabled(self.sandbox_manager.can_undo())
-        self.redo_action.setEnabled(self.sandbox_manager.can_redo())
-        
-        for action in self.findChildren(QAction):
-            if action.text() == 'Undo':
-                action.setEnabled(self.sandbox_manager.can_undo())
-            elif action.text() == 'Redo':
-                action.setEnabled(self.sandbox_manager.can_redo())
+        self.undo_handler.refresh()
+        self.redo_handler.refresh()
 
     def refresh_canvas_from_environment(self):
         if not self.is_canvas_mode() or not self.canvas_widget:
@@ -622,9 +592,16 @@ class SandboxMainWindow(QMainWindow):
                 connection.id
             )
         
-        if (self.detail_panel.current_object and 
-            self.detail_panel.current_object.id not in self.sandbox_manager.environment.objects):
-            self.detail_panel.clear_panel()
+        if not self.detail_panel or not self.detail_panel.current_object:
+            return
+
+        current_object_id = self.detail_panel.current_object.id
+        current_object = self.sandbox_manager.environment.get_object(current_object_id)
+        if current_object:
+            self.detail_panel.display_object(current_object)
+            return
+
+        self.detail_panel.clear_panel()
 
     def on_object_deleted(self, obj):
         reply = QMessageBox.question(self, 'Delete Object', 
@@ -880,6 +857,7 @@ class SandboxMainWindow(QMainWindow):
             self.canvas_widget.scene.clear()
             self.object_widgets.clear()
             self.detail_panel.clear_panel()
+            self.update_undo_redo_buttons()
 
             if selected_category != 'all_categories':
                 category_enum = self.map_category_to_enum(selected_category)
@@ -1120,8 +1098,9 @@ class SandboxMainWindow(QMainWindow):
         from models.object_model import SandboxEnvironment
         environment = SandboxEnvironment.from_dict(data)
 
-        self.sandbox_manager.environment = environment
+        self.sandbox_manager.load_environment(environment)
         self.refresh_canvas_from_environment()
+        self.update_undo_redo_buttons()
 
     def export_png(self):
         if not self.is_canvas_mode():

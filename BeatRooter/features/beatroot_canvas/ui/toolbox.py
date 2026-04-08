@@ -1,6 +1,7 @@
-from PyQt6.QtCore import QSize, pyqtSignal, Qt
-from PyQt6.QtGui import QColor
+from PyQt6.QtCore import QEvent, QPoint, QSize, QTimer, pyqtSignal, Qt
+from PyQt6.QtGui import QColor, QIcon, QTextDocumentFragment
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
@@ -12,14 +13,25 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTextEdit,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from features.beatnote.core.beatnote_model import (
+    BEATNOTE_DEFAULT_ICON,
+    BEATNOTE_ICON_ASSETS,
+    category_label,
+    ordered_categories,
+)
+from features.beatnote.core.beatnote_service import BeatNoteService, BeatNoteServiceError
 from features.beatroot_canvas.core import NodeFactory
 from features.beatroot_canvas.ui.custom_node_dialog import CustomNodeDialog
 from features.beatroot_canvas.ui.node_settings_dialog import NodeSettingsDialog
+from utils.path_utils import get_resource_path
 
 
 class ToolboxWidget(QWidget):
@@ -30,24 +42,38 @@ class ToolboxWidget(QWidget):
 
     COLLAPSED_WIDTH = 72
     RAIL_WIDTH = 72
-    RAIL_HEIGHT = 248
+    RAIL_HEIGHT = 358
     DRAWER_WIDTH = 248
-    COLLAPSED_HEIGHT = 248
+    COLLAPSED_HEIGHT = 358
     EXPANDED_MIN_HEIGHT = 420
     EXPANDED_MAX_HEIGHT = 620
 
-    def __init__(self, graph_manager, current_category=None):
+    def __init__(
+        self,
+        graph_manager,
+        current_category=None,
+        *,
+        beatnote_service=None,
+        beatnote_open_handler=None,
+        beatnote_use_handler=None,
+    ):
         super().__init__()
         self.graph_manager = graph_manager
         self.current_category = NodeFactory.normalize_category(current_category)
+        self.beatnote_service = beatnote_service or BeatNoteService()
+        self.beatnote_open_handler = beatnote_open_handler
+        self.beatnote_use_handler = beatnote_use_handler
         self.expanded_categories = {}
         self.expandable_sections = []
         self.drawer_open = False
+        self.active_panel = "nodes"
+        self._node_badge_text = "0 / 0"
         self.setup_ui()
 
     def setup_ui(self):
         self.setObjectName("FloatingToolboxRoot")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setProperty("blocksCanvasInteraction", True)
 
         root_layout = QHBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -59,20 +85,28 @@ class ToolboxWidget(QWidget):
         self.rail_frame.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         rail_layout = QVBoxLayout(self.rail_frame)
         rail_layout.setContentsMargins(8, 10, 8, 10)
-        rail_layout.setSpacing(10)
+        rail_layout.setSpacing(15)
 
-        self.toggle_btn = self._create_rail_button("+", "Open quick node menu", self.toggle_drawer, primary=True)
+        self.toggle_btn = self._create_rail_button("+", "Open quick node menu", self.open_nodes_panel, primary=True)
+        self.beatnote_btn = self._create_rail_button("≣", "Open BeatNote list", self.toggle_beatnote_panel)
+        self.beatnote_btn.setObjectName("BeatNoteRailButton")
+        self._beatnote_rail_icon = QIcon(get_resource_path("icons/node/Notes.svg", "assets"))
+        self.beatnote_btn.setText("")
+        self.beatnote_btn.setIcon(self._beatnote_rail_icon)
+        self.beatnote_btn.setIconSize(QSize(27, 27))
         self.search_btn = self._create_rail_button("⌕", "Open search", self.open_drawer_and_focus_search)
         self.sections_btn = self._create_rail_button("⇅", "Expand/collapse categories", self.open_drawer_and_toggle_sections)
         self.sections_btn.setProperty("railCompactGlyph", True)
         self.settings_btn = self._create_rail_button("⚙", "Node settings", self.configure_node_settings)
         self.settings_btn.setProperty("railLargeGlyph", True)
 
+        rail_layout.addStretch(1)
         rail_layout.addWidget(self.toggle_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        rail_layout.addWidget(self.beatnote_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         rail_layout.addWidget(self.search_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         rail_layout.addWidget(self.sections_btn, 0, Qt.AlignmentFlag.AlignHCenter)
         rail_layout.addWidget(self.settings_btn, 0, Qt.AlignmentFlag.AlignHCenter)
-        rail_layout.addStretch()
+        rail_layout.addStretch(1)
 
         self.drawer_frame = QFrame()
         self.drawer_frame.setObjectName("FloatingToolboxDrawer")
@@ -147,6 +181,110 @@ class ToolboxWidget(QWidget):
         self.custom_node_btn.clicked.connect(self.create_custom_node_template)
         drawer_layout.addWidget(self.custom_node_btn)
 
+        self.beatnote_frame = QFrame()
+        self.beatnote_frame.setObjectName("BeatNoteQuickSection")
+        beatnote_layout = QVBoxLayout(self.beatnote_frame)
+        beatnote_layout.setContentsMargins(12, 12, 12, 12)
+        beatnote_layout.setSpacing(10)
+
+        beatnote_header = QHBoxLayout()
+        beatnote_header.setContentsMargins(0, 0, 0, 0)
+        beatnote_header.setSpacing(8)
+
+        beatnote_title_wrap = QVBoxLayout()
+        beatnote_title_wrap.setContentsMargins(0, 0, 0, 0)
+        beatnote_title_wrap.setSpacing(2)
+
+        beatnote_eyebrow = QLabel("BEATNOTE")
+        beatnote_eyebrow.setObjectName("BeatNoteQuickEyebrow")
+        beatnote_title_wrap.addWidget(beatnote_eyebrow)
+
+        beatnote_title = QLabel("All notes")
+        beatnote_title.setObjectName("BeatNoteQuickTitle")
+        beatnote_title_wrap.addWidget(beatnote_title)
+
+        beatnote_header.addLayout(beatnote_title_wrap, 1)
+
+        beatnote_actions = QHBoxLayout()
+        beatnote_actions.setContentsMargins(0, 0, 0, 0)
+        beatnote_actions.setSpacing(6)
+
+        self.beatnote_open_btn = QPushButton("Open")
+        self.beatnote_open_btn.setObjectName("BeatNoteQuickOpenButton")
+        self.beatnote_open_btn.clicked.connect(self.open_beatnote_workspace)
+        beatnote_actions.addWidget(self.beatnote_open_btn)
+
+        beatnote_header.addLayout(beatnote_actions)
+        beatnote_layout.addLayout(beatnote_header)
+
+        self.beatnote_empty_label = QLabel("No BeatNotes yet. Create notes in BeatNote and they will appear here.")
+        self.beatnote_empty_label.setObjectName("BeatNoteQuickEmptyLabel")
+        self.beatnote_empty_label.setWordWrap(True)
+        self.beatnote_empty_label.setVisible(False)
+        beatnote_layout.addWidget(self.beatnote_empty_label)
+
+        self.beatnote_tree = QTreeWidget()
+        self.beatnote_tree.setObjectName("BeatNoteQuickTree")
+        self.beatnote_tree.setColumnCount(1)
+        self.beatnote_tree.setHeaderHidden(True)
+        self.beatnote_tree.setRootIsDecorated(True)
+        self.beatnote_tree.setIndentation(14)
+        self.beatnote_tree.setAnimated(True)
+        self.beatnote_tree.setExpandsOnDoubleClick(True)
+        self.beatnote_tree.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.beatnote_tree.itemClicked.connect(self._on_beatnote_tree_item_clicked)
+        beatnote_layout.addWidget(self.beatnote_tree, 1)
+
+        self.beatnote_content_frame = QFrame(self)
+        self.beatnote_content_frame.setObjectName("BeatNoteFloatingPreview")
+        self.beatnote_content_frame.setWindowFlag(Qt.WindowType.FramelessWindowHint, False)
+        self.beatnote_content_frame.setFixedSize(220, 170)
+        self.beatnote_content_frame.hide()
+
+        self.beatnote_preview_timer = QTimer(self)
+        self.beatnote_preview_timer.setSingleShot(True)
+        self.beatnote_preview_timer.timeout.connect(lambda: self._set_beatnote_preview_content(None))
+
+        content_layout = QVBoxLayout(self.beatnote_content_frame)
+        content_layout.setContentsMargins(10, 9, 10, 10)
+        content_layout.setSpacing(6)
+
+        self.beatnote_content_title = QLabel("Select a note")
+        self.beatnote_content_title.setObjectName("BeatNoteFloatingTitle")
+        self.beatnote_content_title.setWordWrap(True)
+        content_layout.addWidget(self.beatnote_content_title)
+
+        self.beatnote_content_body = QTextEdit()
+        self.beatnote_content_body.setObjectName("BeatNoteFloatingBody")
+        self.beatnote_content_body.setReadOnly(True)
+        self.beatnote_content_body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.beatnote_content_body.setPlaceholderText("Click a note to preview")
+        content_layout.addWidget(self.beatnote_content_body, 1)
+
+        self.beatnote_content_frame.setStyleSheet(
+            """
+            QFrame#BeatNoteFloatingPreview {
+                background: rgba(5, 10, 18, 246);
+                border: 1px solid rgba(56, 83, 124, 120);
+                border-radius: 12px;
+            }
+            QLabel#BeatNoteFloatingTitle {
+                color: #d7e5fb;
+                font-size: 11px;
+                font-weight: 700;
+            }
+            QTextEdit#BeatNoteFloatingBody {
+                background: transparent;
+                border: none;
+                color: #d2e1fb;
+                font-size: 10px;
+                selection-background-color: rgba(66, 110, 190, 180);
+            }
+            """
+        )
+
+        drawer_layout.addWidget(self.beatnote_frame, 1)
+
         self.scroll_area = QScrollArea()
         self.scroll_area.setObjectName("ToolboxScrollArea")
         self.scroll_area.setWidgetResizable(True)
@@ -166,13 +304,35 @@ class ToolboxWidget(QWidget):
         root_layout.addWidget(self.drawer_frame)
 
         self.apply_styles()
-        self._apply_shadow(self.rail_frame, blur_radius=22, y_offset=8, alpha=90)
         self._apply_shadow(self.drawer_frame, blur_radius=28, y_offset=10, alpha=110)
 
         self.refresh_header()
         self.create_sections()
         self.filter_nodes()
         self._apply_drawer_state()
+
+        if QApplication.instance() is not None:
+            QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.Type.MouseButtonPress and hasattr(self, "beatnote_content_frame"):
+            if self.beatnote_content_frame.isVisible():
+                global_pos = None
+                if hasattr(event, "globalPosition"):
+                    global_pos = event.globalPosition().toPoint()
+                elif hasattr(event, "globalPos"):
+                    global_pos = event.globalPos()
+
+                if isinstance(global_pos, QPoint):
+                    preview_local = self.beatnote_content_frame.mapFromGlobal(global_pos)
+                    tree_local = self.beatnote_tree.viewport().mapFromGlobal(global_pos)
+
+                    in_preview = self.beatnote_content_frame.rect().contains(preview_local)
+                    in_tree = self.beatnote_tree.viewport().rect().contains(tree_local)
+
+                    if not in_preview and not in_tree:
+                        self._set_beatnote_preview_content(None)
+        return super().eventFilter(watched, event)
 
     def apply_styles(self):
         self.setStyleSheet(
@@ -181,28 +341,27 @@ class ToolboxWidget(QWidget):
                 background: transparent;
             }
             QFrame#FloatingToolboxRail {
-                background: rgba(9, 16, 27, 236);
-                border: 1px solid rgba(76, 101, 145, 150);
-                border-radius: 26px;
+                background: transparent;
+                border: none;
             }
             QToolButton[railButton="true"] {
-                min-width: 42px;
-                max-width: 42px;
-                min-height: 42px;
-                max-height: 42px;
+                min-width: 58px;
+                max-width: 58px;
+                min-height: 58px;
+                max-height: 58px;
                 background: rgba(15, 25, 40, 242);
                 color: #dbe7ff;
                 border: 1px solid rgba(81, 108, 154, 145);
-                border-radius: 15px;
-                font-size: 17px;
+                border-radius: 20px;
+                font-size: 20px;
                 font-weight: 700;
                 font-family: 'DejaVu Sans', 'Segoe UI Symbol';
             }
             QToolButton[railLargeGlyph="true"] {
-                font-size: 22px;
+                font-size: 25px;
             }
             QToolButton[railCompactGlyph="true"] {
-                font-size: 13px;
+                font-size: 16px;
                 padding: 0px;
                 qproperty-toolButtonStyle: ToolButtonTextOnly;
             }
@@ -225,6 +384,9 @@ class ToolboxWidget(QWidget):
                     stop: 0 #4e8cff,
                     stop: 1 #2758ea
                 );
+            }
+            QToolButton#BeatNoteRailButton {
+                font-size: 16px;
             }
             QToolButton[railButton="true"]:pressed {
                 background: rgba(33, 53, 82, 255);
@@ -304,7 +466,8 @@ class ToolboxWidget(QWidget):
                 selection-background-color: #27426e;
             }
             QPushButton#ToolboxGhostButton,
-            QPushButton#CustomNodeBtn {
+            QPushButton#CustomNodeBtn,
+            QPushButton#BeatNoteQuickOpenButton {
                 min-height: 34px;
                 border-radius: 12px;
                 font-size: 10px;
@@ -336,6 +499,91 @@ class ToolboxWidget(QWidget):
                     stop: 0 #2f69ef,
                     stop: 1 #224cc8
                 );
+            }
+            QFrame#BeatNoteQuickSection {
+                background: rgba(11, 18, 29, 235);
+                border: none;
+                border-radius: 0px;
+            }
+            QLabel#BeatNoteQuickEyebrow {
+                color: #74b4ff;
+                font-size: 9px;
+                font-weight: 700;
+                letter-spacing: 1px;
+            }
+            QLabel#BeatNoteQuickTitle {
+                color: #f4f8ff;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            QPushButton#BeatNoteQuickOpenButton {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 #2458cf,
+                    stop: 1 #1b3da4
+                );
+                color: #f6fbff;
+                border: 1px solid rgba(102, 137, 213, 189);
+            }
+            QPushButton#BeatNoteQuickOpenButton:hover {
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 0,
+                    stop: 0 #2f69ef,
+                    stop: 1 #224cc8
+                );
+            }
+            QFrame#BeatNotePreviewCard {
+                background: rgba(14, 22, 34, 110);
+                border: 1px solid rgba(48, 73, 109, 62);
+                border-radius: 10px;
+            }
+            QLabel#BeatNoteQuickContentTitle {
+                color: #b8c9e8;
+                font-size: 10px;
+                font-weight: 600;
+            }
+            QTextEdit#BeatNoteQuickContentBody {
+                background: transparent;
+                border: none;
+                color: #cedcf5;
+                font-size: 10px;
+                line-height: 1.35;
+                selection-background-color: rgba(66, 110, 190, 180);
+            }
+            QLabel#BeatNoteQuickEmptyLabel {
+                color: #8ea2c5;
+                font-size: 10px;
+                padding: 4px 2px 2px 2px;
+            }
+            QTreeWidget#BeatNoteQuickTree {
+                show-decoration-selected: 0;
+                background: transparent;
+                border: none;
+                color: #dce8ff;
+                font-size: 10px;
+                outline: none;
+            }
+            QTreeWidget#BeatNoteQuickTree::item {
+                min-height: 24px;
+                padding: 2px 4px;
+                selection-background-color: transparent;
+                selection-color: #dce8ff;
+            }
+            QTreeWidget#BeatNoteQuickTree::item:selected {
+                background: transparent;
+                color: #dce8ff;
+            }
+            QTreeWidget#BeatNoteQuickTree::item:selected:active,
+            QTreeWidget#BeatNoteQuickTree::item:selected:!active {
+                background: transparent;
+                color: #dce8ff;
+            }
+            QTreeWidget#BeatNoteQuickTree::branch:selected {
+                background: transparent;
+            }
+            QTreeWidget#BeatNoteQuickTree::branch:selected:active,
+            QTreeWidget#BeatNoteQuickTree::branch:selected:!active {
+                background: transparent;
             }
             QScrollArea#ToolboxScrollArea,
             QWidget#ToolboxScrollHost {
@@ -468,7 +716,26 @@ class ToolboxWidget(QWidget):
 
     def toggle_drawer(self):
         self.drawer_open = not self.drawer_open
+        if self.drawer_open:
+            self.refresh_beatnote_preview()
         self._apply_drawer_state()
+
+    def open_nodes_panel(self):
+        if self.drawer_open and self.active_panel == "nodes":
+            self.close_drawer()
+            return
+        self.active_panel = "nodes"
+        self.open_drawer()
+
+    def toggle_beatnote_panel(self):
+        if self.drawer_open and self.active_panel == "beatnotes":
+            self.close_drawer()
+            return
+        self.open_beatnote_panel()
+
+    def open_beatnote_panel(self):
+        self.active_panel = "beatnotes"
+        self.open_drawer()
 
     def close_drawer(self):
         self.drawer_open = False
@@ -477,27 +744,186 @@ class ToolboxWidget(QWidget):
     def open_drawer(self):
         if not self.drawer_open:
             self.drawer_open = True
-            self._apply_drawer_state()
+        if self.active_panel == "beatnotes":
+            self.refresh_beatnote_preview()
+        self._apply_drawer_state()
 
     def open_drawer_and_focus_search(self):
+        self.active_panel = "nodes"
         self.open_drawer()
         self.search_input.setFocus()
         self.search_input.selectAll()
 
     def open_drawer_and_toggle_sections(self):
+        self.active_panel = "nodes"
         self.open_drawer()
         self.toggle_all_sections()
 
     def _apply_drawer_state(self):
         self.drawer_frame.setVisible(self.drawer_open)
-        self.toggle_btn.setText("−" if self.drawer_open else "+")
-        self.toggle_btn.setToolTip("Collapse quick node menu" if self.drawer_open else "Open quick node menu")
+        is_nodes_panel = self.active_panel == "nodes"
+        self.title_label.setText("Nodes" if is_nodes_panel else "BeatNote")
+        self.search_input.setVisible(is_nodes_panel)
+        self.filter_combo.setVisible(is_nodes_panel)
+        self.expand_all_btn.setVisible(is_nodes_panel)
+        self.custom_node_btn.setVisible(is_nodes_panel)
+        self.scroll_area.setVisible(is_nodes_panel)
+        self.beatnote_frame.setVisible(not is_nodes_panel)
+        self.search_btn.setVisible(True)
+        self.sections_btn.setVisible(True)
+        self.settings_btn.setVisible(True)
+        self.node_count_label.setText(self._current_badge_text())
+        self.toggle_btn.setText("−" if self.drawer_open and is_nodes_panel else "+")
+        self.toggle_btn.setToolTip("Collapse quick node menu" if self.drawer_open and is_nodes_panel else "Open quick node menu")
+        if self.drawer_open and not is_nodes_panel:
+            self.beatnote_btn.setIcon(QIcon())
+            self.beatnote_btn.setText("−")
+        else:
+            self.beatnote_btn.setText("")
+            self.beatnote_btn.setIcon(self._beatnote_rail_icon)
+        self.beatnote_btn.setToolTip("Collapse BeatNote list" if self.drawer_open and not is_nodes_panel else "Open BeatNote list")
+        if not self.drawer_open or is_nodes_panel:
+            self._set_beatnote_preview_content(None)
         parent = self.parentWidget()
         if parent is not None:
             self.sync_overlay_size(parent.size())
         else:
             self.adjustSize()
         self.raise_()
+
+    def _current_badge_text(self):
+        if self.active_panel == "beatnotes":
+            try:
+                total_notes = len(self.beatnote_service.list())
+            except BeatNoteServiceError:
+                total_notes = 0
+            return f"{total_notes} notes"
+        return self._node_badge_text
+
+    def _plain_text_from_note(self, raw_content):
+        text = QTextDocumentFragment.fromHtml(str(raw_content or "")).toPlainText().strip()
+        if text:
+            return text
+        return str(raw_content or "").strip()
+
+    def open_beatnote_workspace(self):
+        if callable(self.beatnote_open_handler):
+            self.beatnote_open_handler()
+
+    def _beatnote_tree_icon(self, icon_key):
+        resolved_key = str(icon_key or BEATNOTE_DEFAULT_ICON)
+        icon_asset = BEATNOTE_ICON_ASSETS.get(resolved_key)
+        if not icon_asset:
+            return QIcon()
+        return QIcon(get_resource_path(icon_asset, "assets"))
+
+    def _set_beatnote_preview_content(self, note=None, *, anchor_item=None):
+        if note is None:
+            self.beatnote_preview_timer.stop()
+            self.beatnote_content_title.setText("Select a note")
+            self.beatnote_content_body.clear()
+            self.beatnote_content_frame.hide()
+            return
+
+        self.beatnote_content_title.setText(note.title or "Untitled BeatNote")
+        self.beatnote_content_body.setPlainText(self._plain_text_from_note(note.content) or "No content yet.")
+        self._position_beatnote_preview(anchor_item)
+        self.beatnote_content_frame.show()
+        self.beatnote_content_frame.raise_()
+        self.beatnote_preview_timer.start(5200)
+
+    def _preview_host_widget(self):
+        host = self.parentWidget()
+        if host is not None:
+            return host
+        window = self.window()
+        if isinstance(window, QWidget):
+            return window
+        return self
+
+    def _ensure_preview_parent(self):
+        host = self._preview_host_widget()
+        if self.beatnote_content_frame.parentWidget() is host:
+            return host
+        self.beatnote_content_frame.setParent(host)
+        self.beatnote_content_frame.hide()
+        return host
+
+    def _position_beatnote_preview(self, anchor_item=None):
+        host = self._ensure_preview_parent()
+        if anchor_item is None:
+            anchor_item = self.beatnote_tree.currentItem()
+        if anchor_item is None:
+            return
+
+        item_rect = self.beatnote_tree.visualItemRect(anchor_item)
+        if item_rect.isNull():
+            return
+
+        anchor = self.beatnote_tree.viewport().mapToGlobal(item_rect.topRight())
+        local_anchor = host.mapFromGlobal(anchor)
+        proposed = QPoint(local_anchor.x() - 34, local_anchor.y() - 6)
+
+        margin = 8
+        max_x = max(margin, host.width() - self.beatnote_content_frame.width() - margin)
+        max_y = max(margin, host.height() - self.beatnote_content_frame.height() - margin)
+        clamped_x = min(max(margin, proposed.x()), max_x)
+        clamped_y = min(max(margin, proposed.y()), max_y)
+        self.beatnote_content_frame.move(clamped_x, clamped_y)
+
+    def _on_beatnote_tree_item_clicked(self, item, _column):
+        note_id = item.data(0, Qt.ItemDataRole.UserRole)
+        if not isinstance(note_id, str):
+            item.setExpanded(not item.isExpanded())
+            self._set_beatnote_preview_content(None)
+            return
+        note = self._beatnote_note_by_id.get(note_id)
+        self._set_beatnote_preview_content(note, anchor_item=item)
+
+    def refresh_beatnote_preview(self):
+        if not hasattr(self, "beatnote_tree"):
+            return
+
+        self.beatnote_tree.clear()
+        self._beatnote_note_by_id = {}
+        try:
+            notes = self.beatnote_service.list()
+        except BeatNoteServiceError:
+            notes = []
+
+        if not notes:
+            self.beatnote_empty_label.setVisible(True)
+            self.beatnote_tree.setVisible(False)
+            self._set_beatnote_preview_content(None)
+            self.node_count_label.setText("0 notes")
+            return
+
+        self.beatnote_empty_label.setVisible(False)
+        self.beatnote_tree.setVisible(True)
+
+        grouped = {}
+        for note in notes:
+            grouped.setdefault(note.category, []).append(note)
+
+        for category in ordered_categories(grouped.keys()):
+            category_notes = grouped[category]
+            category_item = QTreeWidgetItem([f"{category_label(category)} ({len(category_notes)})"])
+            category_item.setFlags(category_item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            category_item.setData(0, Qt.ItemDataRole.UserRole, None)
+            self.beatnote_tree.addTopLevelItem(category_item)
+            category_item.setExpanded(True)
+
+            for note in category_notes:
+                note_title = note.title or "Untitled BeatNote"
+                note_item = QTreeWidgetItem([note_title])
+                note_item.setIcon(0, self._beatnote_tree_icon(note.icon))
+                note_item.setData(0, Qt.ItemDataRole.UserRole, note.id)
+                note_item.setToolTip(0, note_title)
+                category_item.addChild(note_item)
+                self._beatnote_note_by_id[note.id] = note
+
+        self._set_beatnote_preview_content(None)
+        self.node_count_label.setText(f"{len(notes)} notes")
 
     def refresh_header(self):
         pass
@@ -840,7 +1266,9 @@ class ToolboxWidget(QWidget):
             if matches_search and matches_filter:
                 visible_count += 1
 
-        self.node_count_label.setText(f"{visible_count} / {total_count}")
+        self._node_badge_text = f"{visible_count} / {total_count}"
+        if self.active_panel == "nodes":
+            self.node_count_label.setText(self._node_badge_text)
 
     def on_node_button_click(self):
         sender = self.sender()

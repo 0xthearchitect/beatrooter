@@ -2,7 +2,7 @@ class ThemeManager:
     THEMES = {
         'cyber_modern': """
             QMainWindow {
-                background-color: #0b111a;
+                background-color: #0c131f;
                 color: #c8d1e0;
             }
             QWidget {
@@ -13,7 +13,7 @@ class ThemeManager:
                 font-size: 11px;
             }
             #MainRoot {
-                background-color: #0b111a;
+                background-color: #0c131f;
             }
             #ToolboxColumn, #DetailColumn {
                 background-color: #0f1622;
@@ -23,19 +23,19 @@ class ThemeManager:
                 border-right: none;
             }
             #DetailColumn {
-                border-left: 1px solid #273347;
+                border-left: none;
             }
             QGraphicsView {
-                background-color: #0b111a;
+                background-color: #0c131f;
                 border: none;
             }
             QSplitter::handle {
-                background-color: #273347;
+                background-color: transparent;
                 width: 1px;
                 margin: 0px;
             }
             QSplitter::handle:hover {
-                background-color: #3b4f68;
+                background-color: transparent;
             }
             QMenuBar {
                 background-color: #0e1520;
@@ -54,7 +54,7 @@ class ThemeManager:
             }
             QToolBar#MainToolbar {
                 background-color: #0e1520;
-                border-bottom: 1px solid #273347;
+                border-bottom: none;
                 spacing: 4px;
                 padding: 5px 8px;
             }
@@ -102,6 +102,52 @@ class ThemeManager:
             QTabBar::tab:hover:!selected {
                 background-color: #17243a;
                 color: #c9d5e8;
+            }
+            QTabBar#DocumentTabs {
+                background-color: #0e1520;
+                border: none;
+                border-bottom: 1px solid #223248;
+                padding: 1px 6px 0px 6px;
+            }
+            QTabBar#DocumentTabs::tab {
+                background-color: #0e1520;
+                color: #96a9c7;
+                border: 1px solid #1d2b3e;
+                border-bottom: 1px solid #0c131f;
+                border-top-left-radius: 3px;
+                border-top-right-radius: 3px;
+                padding: 6px 16px 6px 12px;
+                margin-right: 3px;
+            }
+            QTabBar#DocumentTabs::tab:selected {
+                background-color: #0c131f;
+                color: #dbe7f8;
+                border: 1px solid #2a3d57;
+                border-bottom: 1px solid #0c131f;
+            }
+            QTabBar#DocumentTabs::tab:hover:!selected {
+                background-color: #101827;
+                color: #c8d8ef;
+                border: 1px solid #29405b;
+                border-bottom: 1px solid #0c131f;
+            }
+            QToolButton#DocumentTabCloseButton {
+                background-color: transparent;
+                color: #ff5f66;
+                border: none;
+                padding: 0px;
+                min-width: 18px;
+                min-height: 18px;
+                max-width: 18px;
+                max-height: 18px;
+                font-size: 15px;
+                font-weight: 800;
+            }
+            QToolButton#DocumentTabCloseButton:hover {
+                color: #ff9aa0;
+            }
+            QToolButton#DocumentTabCloseButton:pressed {
+                color: #ffd4d7;
             }
             QGroupBox {
                 color: #7688a3;

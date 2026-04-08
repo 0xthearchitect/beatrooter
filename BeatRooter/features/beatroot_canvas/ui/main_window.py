@@ -13,11 +13,13 @@ from datetime import datetime
 from PyQt6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, 
                              QToolBar, QStatusBar, QFileDialog, QMessageBox,
                              QSplitter, QApplication, QGraphicsLineItem, QGraphicsRectItem,
-                             QDialog, QDialogButtonBox, QPlainTextEdit, QTabBar)
+                             QDialog, QDialogButtonBox, QPlainTextEdit, QTabBar,
+                             QLabel, QComboBox, QToolButton)
 from PyQt6.QtCore import Qt, QPointF, QLineF, QSettings, QRectF, QTimer
-from PyQt6.QtGui import QAction, QIcon, QKeySequence, QPen, QColor
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QKeySequence, QPen, QColor
 from PyQt6 import sip
 
+from features.beatnote.core.beatnote_service import BeatNoteService
 from features.beatroot_canvas.core import GraphManager, StorageManager, ThemeManager, NodeFactory
 from features.beatroot_canvas.core.flipper_workspace_importer import FlipperWorkspaceImporter
 from features.beatroot_canvas.core.flipper_device_manager import FlipperDeviceManager
@@ -29,9 +31,11 @@ from features.beatroot_canvas.ui.toolbox import ToolboxWidget
 from features.beatroot_canvas.ui.detail_panel import DetailPanel
 from features.beatroot_canvas.ui.node_widget import NodeWidget
 from features.beatroot_canvas.ui.dynamic_edge import DynamicEdge
+from features.beatroot_canvas.ui.redo_action import RedoActionHandler
 from features.beatroot_canvas.ui.tool_node_dialogs import ToolNodeConfigDialog, ToolNodeOutputDialog
 from features.beatroot_canvas.ui.stacker_item import StackerItem
 from features.beatroot_canvas.ui.stackers_panel import StackersPanel, StackerDetailsDialog
+from features.beatroot_canvas.ui.undo_action import UndoActionHandler
 from utils.image_utils import ImageUtils
 #from ai.ai_assistant import AIAssistant
 from utils.path_utils import get_resource_path
@@ -54,6 +58,7 @@ class DigitalDetectiveBoard(QMainWindow):
         self.tool_output_cache = {}
         self.pending_stacker_preview_item = None
         self._active_stacker_drag_contexts = {}
+        self._active_node_move_snapshot = None
         self._applying_stacker_cascade = False
         self._syncing_stacker_selection = False
         self.flipper_explorer_dialog = None
@@ -65,6 +70,12 @@ class DigitalDetectiveBoard(QMainWindow):
         self._suspend_document_dirty_tracking = False
         self._missing_tools_prompt_shown = False
         self._suppress_missing_tools_prompt = False
+        self.edge_style_combo = None
+        self.edge_style_actions = {}
+        self._node_clipboard = []
+        self._node_clipboard_paste_count = 0
+        self.undo_handler = UndoActionHandler(self)
+        self.redo_handler = RedoActionHandler(self)
         NodeFactory.reset_custom_node_templates()
         NodeFactory.reset_node_template_settings()
 
@@ -89,8 +100,8 @@ class DigitalDetectiveBoard(QMainWindow):
             self.toolbox.update_category(category)
         
         self.statusBar().showMessage(f"Ready - {self.get_project_title()}")
-
-        self.graph_manager.save_state("Initial state")
+        self.graph_manager.reset_history("Initial state")
+        self.update_undo_redo_buttons()
         if self.documents and self.active_document_index >= 0:
             self.documents[self.active_document_index]["dirty"] = False
             self._update_document_tab_label(self.active_document_index)
@@ -119,7 +130,14 @@ class DigitalDetectiveBoard(QMainWindow):
         self.main_splitter = splitter
         self._detail_panel_last_width = 300
 
-        self.toolbox = ToolboxWidget(self.graph_manager, self.category)
+        self.beatnote_service = BeatNoteService()
+        self.toolbox = ToolboxWidget(
+            self.graph_manager,
+            self.category,
+            beatnote_service=self.beatnote_service,
+            beatnote_open_handler=self.open_beatnote_workspace,
+            beatnote_use_handler=self.apply_beatnote_to_selected_node,
+        )
         self.toolbox.setObjectName("ToolboxColumn")
         
         # Canvas column (tabs + canvas)
@@ -141,6 +159,7 @@ class DigitalDetectiveBoard(QMainWindow):
 
         self.canvas_widget = CanvasWidget(self.graph_manager)
         self.canvas_widget.setObjectName("CanvasView")
+        self._apply_canvas_accessibility_preferences()
         canvas_column_layout.addWidget(self.canvas_widget)
         splitter.addWidget(canvas_column)
         self.canvas_widget.viewport_resized.connect(self._sync_floating_toolbox_geometry)
@@ -149,7 +168,7 @@ class DigitalDetectiveBoard(QMainWindow):
         self.toolbox.raise_()
         
         # Detail panel
-        self.detail_panel = DetailPanel(self)
+        self.detail_panel = DetailPanel(self, beatnote_service=self.beatnote_service)
         self.detail_panel.setObjectName("DetailColumn")
         self.detail_panel.setMinimumWidth(380)
         self.detail_panel.setMaximumWidth(540)
@@ -205,6 +224,29 @@ class DigitalDetectiveBoard(QMainWindow):
         y = 18
         self.toolbox.move(x, y)
         self.toolbox.raise_()
+
+    def _apply_canvas_accessibility_preferences(self) -> None:
+        if hasattr(self, "canvas_widget"):
+            self.canvas_widget.set_background_style(self._canvas_background_style)
+        if hasattr(self, "edge_items"):
+            for edge_item in self.edge_items.values():
+                if edge_item is not None and not sip.isdeleted(edge_item):
+                    edge_item.set_render_style(self._edge_render_style)
+        self._sync_edge_style_controls()
+
+    def _sync_edge_style_controls(self) -> None:
+        normalized_style = DynamicEdge.normalize_render_style(self._edge_render_style)
+        if self.edge_style_combo is not None:
+            combo_index = self.edge_style_combo.findData(normalized_style)
+            if combo_index >= 0 and combo_index != self.edge_style_combo.currentIndex():
+                self.edge_style_combo.blockSignals(True)
+                self.edge_style_combo.setCurrentIndex(combo_index)
+                self.edge_style_combo.blockSignals(False)
+
+        for style_key, action in self.edge_style_actions.items():
+            action.blockSignals(True)
+            action.setChecked(style_key == normalized_style)
+            action.blockSignals(False)
     
     def create_menu_bar(self):
         menubar = self.menuBar()
@@ -234,16 +276,10 @@ class DigitalDetectiveBoard(QMainWindow):
         
         file_menu.addSeparator()
 
-        self.undo_action = QAction('Undo', self)
-        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        self.undo_action.triggered.connect(self.undo)
-        self.undo_action.setEnabled(False)
+        self.undo_action = self.undo_handler.create_action(self, include_shortcut=True)
         file_menu.addAction(self.undo_action)
         
-        self.redo_action = QAction('Redo', self)
-        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        self.redo_action.triggered.connect(self.redo)
-        self.redo_action.setEnabled(False)
+        self.redo_action = self.redo_handler.create_action(self, include_shortcut=True)
         file_menu.addAction(self.redo_action)
         
         file_menu.addSeparator()
@@ -287,6 +323,46 @@ class DigitalDetectiveBoard(QMainWindow):
         )
         self.suppress_missing_tools_prompt_action.toggled.connect(self._set_suppress_missing_tools_prompt)
         accessibility_menu.addAction(self.suppress_missing_tools_prompt_action)
+
+        canvas_background_menu = accessibility_menu.addMenu('Canvas Background')
+        self.canvas_background_action_group = QActionGroup(self)
+        self.canvas_background_action_group.setExclusive(True)
+
+        self.canvas_background_grid_action = QAction('Grid', self)
+        self.canvas_background_grid_action.setCheckable(True)
+        self.canvas_background_grid_action.setChecked(self._canvas_background_style == 'grid')
+        self.canvas_background_grid_action.triggered.connect(
+            lambda checked: checked and self._set_canvas_background_style('grid')
+        )
+        self.canvas_background_action_group.addAction(self.canvas_background_grid_action)
+        canvas_background_menu.addAction(self.canvas_background_grid_action)
+
+        self.canvas_background_dots_action = QAction('Dots', self)
+        self.canvas_background_dots_action.setCheckable(True)
+        self.canvas_background_dots_action.setChecked(self._canvas_background_style == 'dots')
+        self.canvas_background_dots_action.setToolTip(
+            'Uses a subtle dotted canvas background similar to node-based workflow tools.'
+        )
+        self.canvas_background_dots_action.triggered.connect(
+            lambda checked: checked and self._set_canvas_background_style('dots')
+        )
+        self.canvas_background_action_group.addAction(self.canvas_background_dots_action)
+        canvas_background_menu.addAction(self.canvas_background_dots_action)
+
+        edge_style_menu = accessibility_menu.addMenu('Edge Style')
+        self.edge_style_action_group = QActionGroup(self)
+        self.edge_style_action_group.setExclusive(True)
+        self.edge_style_actions = {}
+        for style_key, style_label in DynamicEdge.render_style_options().items():
+            style_action = QAction(style_label, self)
+            style_action.setCheckable(True)
+            style_action.setChecked(self._edge_render_style == style_key)
+            style_action.triggered.connect(
+                lambda checked, key=style_key: checked and self._set_edge_render_style(key)
+            )
+            self.edge_style_action_group.addAction(style_action)
+            edge_style_menu.addAction(style_action)
+            self.edge_style_actions[style_key] = style_action
 
         # Settings menu
         settings_menu = menubar.addMenu('Settings')
@@ -375,15 +451,11 @@ class DigitalDetectiveBoard(QMainWindow):
         
         self.main_toolbar.addSeparator()
 
-        undo_toolbar_action = QAction('Undo', self)
-        undo_toolbar_action.triggered.connect(self.undo)
-        undo_toolbar_action.setEnabled(False)
-        self.main_toolbar.addAction(undo_toolbar_action)
+        self.undo_toolbar_action = self.undo_handler.create_action(self)
+        self.main_toolbar.addAction(self.undo_toolbar_action)
         
-        redo_toolbar_action = QAction('Redo', self)
-        redo_toolbar_action.triggered.connect(self.redo)
-        redo_toolbar_action.setEnabled(False)
-        self.main_toolbar.addAction(redo_toolbar_action)
+        self.redo_toolbar_action = self.redo_handler.create_action(self)
+        self.main_toolbar.addAction(self.redo_toolbar_action)
         
         self.main_toolbar.addSeparator()
         
@@ -399,6 +471,13 @@ class DigitalDetectiveBoard(QMainWindow):
         reset_zoom_action.triggered.connect(self.reset_zoom)
         self.main_toolbar.addAction(reset_zoom_action)
 
+    def _on_edge_style_combo_changed(self, index: int) -> None:
+        if self.edge_style_combo is None or index < 0:
+            return
+        style_key = str(self.edge_style_combo.itemData(index) or "").strip()
+        if style_key:
+            self._set_edge_render_style(style_key)
+
     def _install_save_state_hook(self):
         original_save_state = self.graph_manager.save_state
 
@@ -406,6 +485,7 @@ class DigitalDetectiveBoard(QMainWindow):
             original_save_state(description)
             if not self._suspend_document_dirty_tracking:
                 self._mark_active_document_dirty()
+            self.update_undo_redo_buttons()
 
         self.graph_manager.save_state = hooked_save_state
 
@@ -454,6 +534,8 @@ class DigitalDetectiveBoard(QMainWindow):
             "dirty": bool(dirty),
             "node_counter": node_counter,
             "edge_counter": edge_counter,
+            "history": [],
+            "history_position": -1,
         }
         self._document_sequence += 1
         self.documents.append(document)
@@ -462,6 +544,7 @@ class DigitalDetectiveBoard(QMainWindow):
         self.document_tabs.blockSignals(True)
         self.document_tabs.addTab("")
         self._update_document_tab_label(tab_index)
+        self._refresh_document_tab_close_buttons()
         self.document_tabs.blockSignals(False)
 
         if activate:
@@ -517,6 +600,27 @@ class DigitalDetectiveBoard(QMainWindow):
         if index == self.active_document_index:
             self._update_window_title_for_active_document()
 
+    def _refresh_document_tab_close_buttons(self):
+        for index in range(self.document_tabs.count()):
+            container = QWidget(self.document_tabs)
+            row = QHBoxLayout(container)
+            row.setContentsMargins(0, 0, 8, 0)
+            row.setSpacing(0)
+
+            close_btn = QToolButton(container)
+            close_btn.setText("✕")
+            close_btn.setAutoRaise(True)
+            close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            close_btn.setToolTip("Close document")
+            close_btn.setObjectName("DocumentTabCloseButton")
+            close_btn.setFixedSize(18, 18)
+            close_btn.clicked.connect(lambda _checked=False, i=index: self._close_document_tab(i))
+
+            row.addStretch(1)
+            row.addWidget(close_btn)
+
+            self.document_tabs.setTabButton(index, QTabBar.ButtonPosition.RightSide, container)
+
     def _update_window_title_for_active_document(self):
         if self.active_document_index < 0 or self.active_document_index >= len(self.documents):
             self.setWindowTitle("BeatRooter")
@@ -529,6 +633,8 @@ class DigitalDetectiveBoard(QMainWindow):
     def _snapshot_active_document(self):
         if self.active_document_index < 0 or self.active_document_index >= len(self.documents):
             return
+        if getattr(self, "detail_panel", None) is not None:
+            self.detail_panel.flush_pending_history()
         document = self.documents[self.active_document_index]
         document["graph_data"] = copy.deepcopy(self.graph_manager.graph_data)
         document["project_type"] = self.project_type
@@ -536,6 +642,8 @@ class DigitalDetectiveBoard(QMainWindow):
         document["file_path"] = self.storage_manager.current_file
         document["node_counter"] = int(self.graph_manager.node_counter)
         document["edge_counter"] = int(self.graph_manager.edge_counter)
+        document["history"] = copy.deepcopy(self.graph_manager.history)
+        document["history_position"] = int(self.graph_manager.history_position)
         self._update_document_tab_label(self.active_document_index)
 
     def _load_document_into_canvas(self, index: int):
@@ -547,9 +655,13 @@ class DigitalDetectiveBoard(QMainWindow):
             self.project_type = document.get("project_type")
             self.category = document.get("category")
             self.storage_manager.current_file = document.get("file_path")
-            self.load_graph_data(copy.deepcopy(document["graph_data"]))
-            self.graph_manager.node_counter = int(document.get("node_counter", self.graph_manager.node_counter))
-            self.graph_manager.edge_counter = int(document.get("edge_counter", self.graph_manager.edge_counter))
+            self.load_graph_data(
+                copy.deepcopy(document["graph_data"]),
+                node_counter=int(document.get("node_counter", 0)),
+                edge_counter=int(document.get("edge_counter", 0)),
+                history=copy.deepcopy(document.get("history") or []),
+                history_position=document.get("history_position"),
+            )
             if self.category:
                 self.toolbox.update_category(self.category)
         finally:
@@ -666,6 +778,7 @@ class DigitalDetectiveBoard(QMainWindow):
         self.documents.pop(index)
         self.document_tabs.blockSignals(True)
         self.document_tabs.removeTab(index)
+        self._refresh_document_tab_close_buttons()
         self.document_tabs.blockSignals(False)
 
         if not self.documents:
@@ -1056,10 +1169,9 @@ class DigitalDetectiveBoard(QMainWindow):
 
         payload["x"] = float(position.x())
         payload["y"] = float(position.y())
-        context = self._active_stacker_drag_contexts.pop(stacker_id, None)
-        if context is None:
-            self.graph_manager.save_state("Move stacker")
-        self.update_undo_redo_buttons()
+        self._active_stacker_drag_contexts.pop(stacker_id, None)
+        self.graph_manager.save_state("Move stacker")
+        self.statusBar().showMessage(f"Moved stacker: {payload.get('name', stacker_id)}")
 
     def _on_stacker_dragged_delta(self, stacker_id: str, delta: QPointF):
         if self._applying_stacker_cascade:
@@ -1099,7 +1211,6 @@ class DigitalDetectiveBoard(QMainWindow):
                     if source_rect.contains(node_rect):
                         tracked_items.append(item)
 
-            self.graph_manager.save_state("Move stacker")
             context = {"items": tracked_items}
             self._active_stacker_drag_contexts[stacker_id] = context
 
@@ -1250,6 +1361,168 @@ class DigitalDetectiveBoard(QMainWindow):
         self.detail_panel.node_data_updated.connect(self.on_node_updated)
         self.detail_panel.node_deleted.connect(self.on_node_deleted)
 
+    def _selected_node_widgets(self):
+        scene = getattr(self.canvas_widget, "scene", None)
+        if scene is None:
+            return []
+        return [item for item in scene.selectedItems() if isinstance(item, NodeWidget)]
+
+    def _selected_node_for_beatnote(self):
+        selected_widgets = self._selected_node_widgets()
+        if selected_widgets:
+            return selected_widgets[0].node
+
+        current_node = getattr(self.detail_panel, "current_node", None)
+        if current_node is None:
+            return None
+        return self.graph_manager.get_node(current_node.id) or current_node
+
+    def open_beatnote_workspace(self):
+        from features.beatnote.ui.beatnote_main_window import BeatNoteMainWindow
+
+        window = BeatNoteMainWindow.launch(parent=self)
+        if window is not None and getattr(window, "beatnote_panel", None) is not None:
+            window.beatnote_panel.reload_notes()
+
+    def apply_beatnote_to_selected_node(self, note, plain_text):
+        clean_text = str(plain_text or "").strip()
+        if not clean_text:
+            self.statusBar().showMessage("That BeatNote does not have any text to reuse")
+            return False
+
+        target_node = self._selected_node_for_beatnote()
+        if target_node is None:
+            QApplication.clipboard().setText(clean_text)
+            self.statusBar().showMessage("No node selected, so the BeatNote was copied to the clipboard")
+            return False
+
+        title = str(getattr(note, "title", "") or "").strip()
+        note_block = clean_text if not title or clean_text.startswith(title) else f"{title}\n{clean_text}"
+        existing_notes = str(target_node.data.get("notes", "") or "").strip()
+
+        if note_block and note_block in existing_notes:
+            self.statusBar().showMessage(f"'{title or 'BeatNote'}' is already in this node")
+            return True
+
+        target_node.data["notes"] = f"{existing_notes}\n\n{note_block}".strip() if existing_notes else note_block
+        self.on_node_updated(target_node)
+        self._refresh_selected_node_panel(target_node)
+        self.graph_manager.save_state(f"Apply BeatNote to {target_node.type} node")
+        self.update_undo_redo_buttons()
+        self.statusBar().showMessage(f"Added '{title or 'BeatNote'}' to the selected {target_node.type} node")
+        return True
+
+    def _collect_nodes_for_duplication(self, preferred_node=None):
+        selected_widgets = self._selected_node_widgets()
+        if preferred_node is not None:
+            if selected_widgets and any(widget.node.id == preferred_node.id for widget in selected_widgets):
+                return [widget.node for widget in selected_widgets]
+            return [preferred_node]
+        return [widget.node for widget in selected_widgets]
+
+    def _copy_nodes_to_clipboard(self, nodes) -> bool:
+        unique_nodes = []
+        seen_ids = set()
+        for node in nodes or []:
+            if node is None or node.id in seen_ids:
+                continue
+            seen_ids.add(node.id)
+            unique_nodes.append(node)
+
+        if not unique_nodes:
+            return False
+
+        origin_x = min(node.position.x() for node in unique_nodes)
+        origin_y = min(node.position.y() for node in unique_nodes)
+        self._node_clipboard = [
+            {
+                "type": node.type,
+                "data": copy.deepcopy(node.data),
+                "offset_x": float(node.position.x() - origin_x),
+                "offset_y": float(node.position.y() - origin_y),
+            }
+            for node in unique_nodes
+        ]
+        self._node_clipboard_paste_count = 0
+        return True
+
+    def _clear_scene_selection(self):
+        scene = getattr(self.canvas_widget, "scene", None)
+        if scene is not None:
+            scene.clearSelection()
+
+    def _paste_nodes_from_clipboard(self, anchor_pos: QPointF | None = None):
+        if not self._node_clipboard:
+            self.statusBar().showMessage("No copied nodes to paste")
+            return []
+
+        if anchor_pos is None:
+            viewport_center = self.canvas_widget.viewport().rect().center()
+            anchor_pos = self.canvas_widget.mapToScene(viewport_center)
+
+        self._node_clipboard_paste_count += 1
+        paste_shift = 28.0 * self._node_clipboard_paste_count
+        pasted_nodes = []
+
+        self._clear_scene_selection()
+
+        for entry in self._node_clipboard:
+            position = QPointF(
+                float(anchor_pos.x()) + float(entry.get("offset_x", 0.0)) + paste_shift,
+                float(anchor_pos.y()) + float(entry.get("offset_y", 0.0)) + paste_shift,
+            )
+            node = self.graph_manager.add_node(
+                str(entry.get("type") or ""),
+                position,
+                copy.deepcopy(entry.get("data") or {}),
+                save_state=False,
+            )
+            self.create_node_visual(node)
+            pasted_nodes.append(node)
+
+            node_widget = self.node_widgets.get(node.id)
+            if node_widget is not None:
+                node_widget.setSelected(True)
+
+        if pasted_nodes:
+            self.graph_manager.save_state(
+                "Paste node" if len(pasted_nodes) == 1 else f"Paste {len(pasted_nodes)} nodes"
+            )
+            self._mark_active_document_dirty()
+            self.update_undo_redo_buttons()
+            self.sync_custom_node_templates_metadata()
+            self.statusBar().showMessage(
+                f"Pasted {len(pasted_nodes)} node" if len(pasted_nodes) == 1 else f"Pasted {len(pasted_nodes)} nodes"
+            )
+
+        return pasted_nodes
+
+    def duplicate_nodes(self, nodes):
+        if not self._copy_nodes_to_clipboard(nodes):
+            self.statusBar().showMessage("No nodes selected to duplicate")
+            return []
+
+        origin_x = min(node.position.x() for node in nodes)
+        origin_y = min(node.position.y() for node in nodes)
+        return self._paste_nodes_from_clipboard(QPointF(origin_x, origin_y))
+
+    def duplicate_node(self, node):
+        if node is None:
+            return []
+        target_nodes = self._collect_nodes_for_duplication(node)
+        return self.duplicate_nodes(target_nodes)
+
+    def copy_selected_nodes(self):
+        nodes = self._collect_nodes_for_duplication()
+        if not self._copy_nodes_to_clipboard(nodes):
+            self.statusBar().showMessage("No nodes selected to copy")
+            return False
+
+        self.statusBar().showMessage(
+            "Copied 1 node" if len(nodes) == 1 else f"Copied {len(nodes)} nodes"
+        )
+        return True
+
     def _apply_detail_panel_visibility(self, visible: bool):
         if not hasattr(self, "main_splitter") or not self.main_splitter:
             return
@@ -1321,6 +1594,14 @@ class DigitalDetectiveBoard(QMainWindow):
         self._suppress_missing_tools_prompt = bool(
             settings.value('accessibility/suppress_missing_tools_prompt', False, type=bool)
         )
+        self._canvas_background_style = str(
+            settings.value('accessibility/canvas_background_style', 'grid')
+        ).strip().lower()
+        if self._canvas_background_style not in {'grid', 'dots'}:
+            self._canvas_background_style = 'grid'
+        self._edge_render_style = DynamicEdge.normalize_render_style(
+            settings.value('accessibility/edge_render_style', 'classic_dashed')
+        )
 
     def _set_suppress_missing_tools_prompt(self, suppress: bool) -> None:
         self._suppress_missing_tools_prompt = bool(suppress)
@@ -1330,6 +1611,33 @@ class DigitalDetectiveBoard(QMainWindow):
             self.statusBar().showMessage('Missing tools prompt silenced')
         else:
             self.statusBar().showMessage('Missing tools prompt enabled')
+
+    def _set_canvas_background_style(self, style: str) -> None:
+        normalized_style = (style or 'grid').strip().lower()
+        if normalized_style not in {'grid', 'dots'}:
+            normalized_style = 'grid'
+
+        self._canvas_background_style = normalized_style
+        self._apply_canvas_accessibility_preferences()
+
+        settings = QSettings('BeatRooter', 'BeatRooter')
+        settings.setValue('accessibility/canvas_background_style', self._canvas_background_style)
+
+        if self._canvas_background_style == 'dots':
+            self.statusBar().showMessage('Canvas background changed to dots')
+        else:
+            self.statusBar().showMessage('Canvas background changed to grid')
+
+    def _set_edge_render_style(self, style_key: str) -> None:
+        normalized_style = DynamicEdge.normalize_render_style(style_key)
+        self._edge_render_style = normalized_style
+        self._apply_canvas_accessibility_preferences()
+
+        settings = QSettings('BeatRooter', 'BeatRooter')
+        settings.setValue('accessibility/edge_render_style', self._edge_render_style)
+
+        style_label = DynamicEdge.render_style_options().get(self._edge_render_style, 'Classic Dashed')
+        self.statusBar().showMessage(f'Edge style changed to {style_label}')
 
     def _has_real_project_context(self) -> bool:
         if self.active_document_index < 0 or self.active_document_index >= len(self.documents):
@@ -1537,9 +1845,9 @@ class DigitalDetectiveBoard(QMainWindow):
             except ValueError as exc:
                 print(f"Failed to register Flipper template: {exc}")
 
-    def _add_imported_node(self, node_type: str, position: QPointF, custom_data: dict):
+    def _add_imported_node(self, node_type: str, position: QPointF, custom_data: dict, save_state: bool = True):
         node_data = NodeFactory.create_node_data(node_type, custom_data=custom_data, category=self.category)
-        node = self.graph_manager.add_node(node_type, position, node_data)
+        node = self.graph_manager.add_node(node_type, position, node_data, save_state=save_state)
         self.create_node_visual(node)
         return node
 
@@ -1710,13 +2018,14 @@ class DigitalDetectiveBoard(QMainWindow):
             position = QPointF(anchor.x() + x_offset, anchor.y() + y_offset)
 
             node_type = artifact.get('node_type', 'flipper_file')
-            self._add_imported_node(node_type, position, file_data)
+            self._add_imported_node(node_type, position, file_data, save_state=False)
             imported.append(artifact)
 
         self.sync_custom_node_templates_metadata()
         self.toolbox.refresh_filter_categories()
         self.toolbox.create_sections()
         self.toolbox.filter_nodes()
+        self.graph_manager.save_state(f"Import {len(imported)} Flipper file(s)")
         self.update_undo_redo_buttons()
 
         module_counts = {}
@@ -1746,6 +2055,7 @@ class DigitalDetectiveBoard(QMainWindow):
             print(f"Creating connection from {edge.source_id} to {edge.target_id}")
             
             edge_item = DynamicEdge(source_widget, target_widget, edge)
+            edge_item.set_render_style(self._edge_render_style)
             self.canvas_widget.scene.addItem(edge_item)
             self.edge_items[edge.id] = edge_item
     
@@ -1766,6 +2076,7 @@ class DigitalDetectiveBoard(QMainWindow):
             
             if edge.id in self.edge_items:
                 edge_item = self.edge_items[edge.id]
+                edge_item.dispose()
                 self.canvas_widget.scene.removeItem(edge_item)
                 del self.edge_items[edge.id]
                 print(f"Edge {edge.id} removed from scene")
@@ -1786,30 +2097,65 @@ class DigitalDetectiveBoard(QMainWindow):
             self.statusBar().showMessage("Edge deletion cancelled")
 
     def undo(self):
-        if self.graph_manager.undo():
-            self.refresh_canvas_from_graph()
-            self.update_undo_redo_buttons()
-            self.statusBar().showMessage("Undo: " + self.graph_manager.history[self.graph_manager.history_position]['description'])
+        self.undo_handler.trigger()
     
     def redo(self):
-        if self.graph_manager.redo():
-            self.refresh_canvas_from_graph()
-            self.update_undo_redo_buttons()
-            self.statusBar().showMessage("Redo: " + self.graph_manager.history[self.graph_manager.history_position]['description'])
+        self.redo_handler.trigger()
     
     def update_undo_redo_buttons(self):
-        self.undo_action.setEnabled(self.graph_manager.can_undo())
-        self.redo_action.setEnabled(self.graph_manager.can_redo())
-        
-        for action in self.findChildren(QAction):
-            if action.text() == 'Undo':
-                action.setEnabled(self.graph_manager.can_undo())
-            elif action.text() == 'Redo':
-                action.setEnabled(self.graph_manager.can_redo())
+        self.undo_handler.refresh()
+        self.redo_handler.refresh()
+
+    def _capture_nodes_for_move(self, preferred_node=None):
+        selected_nodes = self._collect_nodes_for_duplication(preferred_node)
+        if selected_nodes:
+            return selected_nodes
+        if preferred_node is not None:
+            return [preferred_node]
+        return []
+
+    def _on_node_move_started(self, node):
+        tracked_nodes = self._capture_nodes_for_move(node)
+        if not tracked_nodes:
+            self._active_node_move_snapshot = None
+            return
+
+        self._active_node_move_snapshot = {
+            tracked_node.id: QPointF(tracked_node.position)
+            for tracked_node in tracked_nodes
+        }
+
+    def _on_node_move_finished(self, node):
+        snapshot = self._active_node_move_snapshot or {}
+        self._active_node_move_snapshot = None
+        if not snapshot:
+            return
+
+        moved_node_ids = []
+        for node_id, original_position in snapshot.items():
+            current_node = self.graph_manager.get_node(node_id)
+            if current_node is None:
+                continue
+            current_position = current_node.position
+            if (
+                abs(current_position.x() - original_position.x()) >= 0.01
+                or abs(current_position.y() - original_position.y()) >= 0.01
+            ):
+                moved_node_ids.append(node_id)
+
+        if not moved_node_ids:
+            return
+
+        description = "Move node" if len(moved_node_ids) == 1 else f"Move {len(moved_node_ids)} nodes"
+        self.graph_manager.save_state(description)
+        self.statusBar().showMessage(description)
 
     def _bind_node_widget_signals(self, node_widget):
         node_widget.node_updated.connect(self.on_node_selected)
         node_widget.connection_started.connect(self.start_connection)
+        node_widget.duplicate_requested.connect(self.duplicate_node)
+        node_widget.move_started.connect(self._on_node_move_started)
+        node_widget.move_finished.connect(self._on_node_move_finished)
         node_widget.node_deleted.connect(self.on_node_deleted)
         node_widget.delete_selected_requested.connect(self.delete_selected_scene_items)
         node_widget.tool_run_requested.connect(self.on_tool_node_run_requested)
@@ -1962,9 +2308,16 @@ class DigitalDetectiveBoard(QMainWindow):
 
         self.refresh_tool_nodes()
         
-        if (self.detail_panel.current_node and 
-            self.detail_panel.current_node.id not in self.graph_manager.graph_data.nodes):
-            self.detail_panel.clear_panel()
+        if not self.detail_panel.current_node:
+            return
+
+        current_node_id = self.detail_panel.current_node.id
+        current_node = self.graph_manager.get_node(current_node_id)
+        if current_node:
+            self.detail_panel.display_node(current_node)
+            return
+
+        self.detail_panel.clear_panel()
 
     def create_node_visual(self, node):
         from features.beatroot_canvas.core import NodeFactory
@@ -2261,7 +2614,7 @@ class DigitalDetectiveBoard(QMainWindow):
 
         node_data = NodeFactory.create_node_data(result_type, custom_data=custom_data, category=self.category)
         fallback_position = QPointF(tool_node.position.x() + 210, tool_node.position.y())
-        result_node = self.graph_manager.add_node(result_type, fallback_position, node_data)
+        result_node = self.graph_manager.add_node(result_type, fallback_position, node_data, save_state=False)
         result_node.data["generated_by_tool_id"] = tool_node.id
         self.create_node_visual(result_node)
         self._connect_tool_node_to_result(tool_node, result_node)
@@ -2269,7 +2622,7 @@ class DigitalDetectiveBoard(QMainWindow):
 
     def _connect_tool_node_to_result(self, tool_node, result_node):
         try:
-            edge = self.graph_manager.connect_nodes(tool_node.id, result_node.id, "")
+            edge = self.graph_manager.connect_nodes(tool_node.id, result_node.id, "", save_state=False)
         except ValueError:
             return
         self.draw_connection(edge)
@@ -2303,11 +2656,6 @@ class DigitalDetectiveBoard(QMainWindow):
 
         self.refresh_tool_nodes()
 
-        self.graph_manager.save_state(f"Update {node.type} node")
-        self.update_undo_redo_buttons()
-        
-        self.statusBar().showMessage(f"Updated {node.type} node")
-
     def _delete_node_by_id(
         self,
         node_id: str,
@@ -2326,7 +2674,7 @@ class DigitalDetectiveBoard(QMainWindow):
             running_thread.wait(1500)
             running_thread.deleteLater()
 
-        self.graph_manager.remove_node(node.id)
+        self.graph_manager.remove_node(node.id, save_state=save_state)
 
         if node.id in self.node_widgets:
             node_widget = self.node_widgets[node.id]
@@ -2337,6 +2685,7 @@ class DigitalDetectiveBoard(QMainWindow):
         for edge_id, edge_item in self.edge_items.items():
             edge = self.graph_manager.get_edge(edge_id)
             if edge is None or edge.source_id == node.id or edge.target_id == node.id:
+                edge_item.dispose()
                 self.canvas_widget.scene.removeItem(edge_item)
                 edges_to_remove.append(edge_id)
 
@@ -2350,10 +2699,6 @@ class DigitalDetectiveBoard(QMainWindow):
         if refresh_ui:
             self.refresh_tool_nodes()
             self.sync_custom_node_templates_metadata()
-
-        if save_state:
-            self.graph_manager.save_state("Delete node")
-            self.update_undo_redo_buttons()
 
         if show_status:
             self.statusBar().showMessage(f"Deleted {node.type} node and its connections")
@@ -2536,44 +2881,26 @@ class DigitalDetectiveBoard(QMainWindow):
             return f"{project_name} - {category_name}"
         return "BeatRooter - New Investigation"
 
-    def load_graph_data(self, graph_data):
+    def load_graph_data(
+        self,
+        graph_data,
+        node_counter=None,
+        edge_counter=None,
+        history=None,
+        history_position=None,
+    ):
         self._stop_all_tool_threads()
         NodeFactory.load_custom_node_templates(graph_data.metadata.get('custom_node_templates', {}))
         NodeFactory.load_node_template_settings(graph_data.metadata.get('node_template_settings', {}))
-        self.graph_manager.clear_graph()
-        self.graph_manager.graph_data.metadata = dict(graph_data.metadata)
-        self._ensure_stacker_metadata()
-        self.canvas_widget.scene.clear()
-        self.node_widgets.clear()
-        self.edge_items.clear()
-        self.stacker_items.clear()
-
-        self.load_stackers_from_metadata()
-        
-        for node in graph_data.nodes.values():
-            self.graph_manager.graph_data.nodes[node.id] = node
-            node_widget = NodeWidget(node, self.category, self.project_type)
-            self.canvas_widget.add_node_widget(node_widget)
-            self._bind_node_widget_signals(node_widget)
-            self.node_widgets[node.id] = node_widget
-        
-        for edge in graph_data.edges.values():
-            self.graph_manager.graph_data.edges[edge.id] = edge
-            self.draw_connection(edge)
-
-        node_indices = [
-            int(str(node_id).split("_")[-1])
-            for node_id in self.graph_manager.graph_data.nodes.keys()
-            if str(node_id).startswith("node_") and str(node_id).split("_")[-1].isdigit()
-        ]
-        edge_indices = [
-            int(str(edge_id).split("_")[-1])
-            for edge_id in self.graph_manager.graph_data.edges.keys()
-            if str(edge_id).startswith("edge_") and str(edge_id).split("_")[-1].isdigit()
-        ]
-        self.graph_manager.node_counter = (max(node_indices) + 1) if node_indices else 0
-        self.graph_manager.edge_counter = (max(edge_indices) + 1) if edge_indices else 0
-
+        self.graph_manager.load_snapshot(
+            graph_data,
+            node_counter=node_counter,
+            edge_counter=edge_counter,
+            history=history,
+            history_position=history_position,
+            description="Loaded investigation",
+        )
+        self.refresh_canvas_from_graph()
         self.refresh_tool_nodes()
         self.toolbox.refresh_filter_categories()
         self.toolbox.create_sections()
@@ -2816,6 +3143,14 @@ class DigitalDetectiveBoard(QMainWindow):
                 self.tools_integration.tools_dock.show()
 
     def keyPressEvent(self, event):
+        focus_widget = QApplication.focusWidget()
+        if focus_widget is not None and any(
+            focus_widget.inherits(class_name)
+            for class_name in ("QLineEdit", "QTextEdit", "QPlainTextEdit", "QAbstractSpinBox", "QComboBox")
+        ):
+            super().keyPressEvent(event)
+            return
+
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
             if event.key() == Qt.Key.Key_Z:
                 self.undo()
@@ -2825,6 +3160,15 @@ class DigitalDetectiveBoard(QMainWindow):
                 self.redo()
                 event.accept()
                 return
+            elif event.key() == Qt.Key.Key_C:
+                if self.copy_selected_nodes():
+                    event.accept()
+                    return
+            elif event.key() == Qt.Key.Key_V:
+                if self._node_clipboard:
+                    self._paste_nodes_from_clipboard()
+                    event.accept()
+                    return
 
         if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             self.delete_selected_scene_items()

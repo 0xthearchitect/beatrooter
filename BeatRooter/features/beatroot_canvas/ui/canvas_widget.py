@@ -57,6 +57,7 @@ class CanvasWidget(QGraphicsView):
         
         self.grid_size = 22
         self.show_grid = True
+        self.background_style = "grid"
 
         self.zoom_step = 1.12
         self.min_zoom = 0.45
@@ -118,7 +119,9 @@ class CanvasWidget(QGraphicsView):
         background_gradient.setColorAt(1.0, QColor(11, 18, 29))
         painter.fillRect(rect, background_gradient)
 
-        if self.show_grid:
+        if self.background_style == "dots":
+            self._draw_dotted_background(painter, rect)
+        elif self.show_grid:
             left = int(rect.left()) - (int(rect.left()) % self.grid_size)
             top = int(rect.top()) - (int(rect.top()) % self.grid_size)
             right = int(rect.right())
@@ -132,12 +135,50 @@ class CanvasWidget(QGraphicsView):
                 painter.setPen(major_pen if is_major_x else minor_pen)
                 painter.drawLine(x, top, x, bottom)
 
-            for y in range(top, bottom, self.grid_size):
+            for y in range(top + self.grid_size, bottom, self.grid_size):
                 is_major_y = (y // self.grid_size) % 5 == 0
                 painter.setPen(major_pen if is_major_y else minor_pen)
                 painter.drawLine(left, y, right, y)
+
+    def _draw_dotted_background(self, painter, rect):
+        dot_spacing = 55
+        dot_radius = 1.7
+        left = int(rect.left()) - (int(rect.left()) % dot_spacing)
+        top = int(rect.top()) - (int(rect.top()) % dot_spacing)
+        right = int(rect.right())
+        bottom = int(rect.bottom())
+
+        dot_brush = QBrush(QColor(112, 138, 172, 95))
+        painter.setPen(Qt.PenStyle.NoPen)
+
+        for x in range(left, right + dot_spacing, dot_spacing):
+            for y in range(top, bottom + dot_spacing, dot_spacing):
+                painter.setBrush(dot_brush)
+                painter.drawEllipse(QPointF(float(x), float(y)), dot_radius, dot_radius)
+
+    def set_background_style(self, style: str):
+        normalized_style = (style or "grid").lower()
+        if normalized_style not in {"grid", "dots"}:
+            normalized_style = "grid"
+
+        self.background_style = normalized_style
+        self.show_grid = normalized_style == "grid"
+        self.viewport().update()
+
+    def _is_overlay_event(self, viewport_pos) -> bool:
+        point = viewport_pos.toPoint() if hasattr(viewport_pos, "toPoint") else viewport_pos
+        widget = self.viewport().childAt(point)
+        while widget is not None and widget is not self.viewport():
+            if bool(widget.property("blocksCanvasInteraction")):
+                return True
+            widget = widget.parentWidget()
+        return False
     
     def mousePressEvent(self, event):
+        if self._is_overlay_event(event.pos()):
+            event.ignore()
+            return
+
         if self.stacker_selection_mode and event.button() == Qt.MouseButton.LeftButton:
             self._stacker_origin = event.pos()
             self._stacker_dragging = True
@@ -170,6 +211,14 @@ class CanvasWidget(QGraphicsView):
             super().mousePressEvent(event)
     
     def mouseMoveEvent(self, event):
+        if (
+            not self.dragging_view
+            and not self._stacker_dragging
+            and self._is_overlay_event(event.pos())
+        ):
+            event.ignore()
+            return
+
         if self.stacker_selection_mode and self._stacker_dragging:
             rect = QRect(self._stacker_origin, event.pos()).normalized()
             self._stacker_rubber_band.setGeometry(rect)
@@ -426,6 +475,10 @@ class CanvasWidget(QGraphicsView):
         self.create_node_at_position(node_type, scene_pos)
     
     def wheelEvent(self, event):
+        if self._is_overlay_event(event.position()):
+            event.ignore()
+            return
+
         if event.angleDelta().y() > 0:
             self.zoom_by(self.zoom_step)
         else:

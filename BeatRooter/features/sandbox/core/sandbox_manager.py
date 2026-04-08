@@ -1,6 +1,13 @@
-from models.object_model import SandboxEnvironment, SandboxObject, ObjectType
-from features.sandbox.core.sandbox_object_factory import SandboxObjectFactory
 import copy
+import time
+
+from models.object_model import (
+    SandboxConnection,
+    SandboxEnvironment,
+    SandboxObject,
+    ObjectType,
+)
+from features.sandbox.core.sandbox_object_factory import SandboxObjectFactory
 
 class SandboxManager:
     def __init__(self):
@@ -8,49 +15,46 @@ class SandboxManager:
         self.history = []
         self.history_position = -1
         self.max_history_size = 50
+
+    def reset_history(self, description="Initial state"):
+        self.history = []
+        self.history_position = -1
+        self.save_state(description)
+
+    def load_environment(self, environment: SandboxEnvironment, description="Loaded sandbox"):
+        self.environment = copy.deepcopy(environment)
+        self.reset_history(description)
+
+    def get_current_history_description(self):
+        if 0 <= self.history_position < len(self.history):
+            return self.history[self.history_position].get('description', '')
+        return ""
     
     def add_connection(self, source_id: str, target_id: str, connection_type: str = "network") -> str:
-
-        if (source_id in self.environment.objects and 
-            target_id in self.environment.objects):
-            
-            self.save_state("Add connection between objects")
-            
-            import time
+        if (
+            source_id in self.environment.objects
+            and target_id in self.environment.objects
+        ):
             connection_id = f"conn_{int(time.time() * 1000)}"
-        
-            
-            from models.object_model import SandboxConnection
             connection = SandboxConnection(
                 id=connection_id,
                 source_id=source_id,
                 target_id=target_id,
-                connection_type=connection_type
+                connection_type=connection_type,
             )
-            
+
             self.environment.connections[connection_id] = connection
-            
             self.environment.objects[source_id].add_connection(connection_id)
             self.environment.objects[target_id].add_connection(connection_id)
-            
+            self.save_state("Add connection between objects")
             return connection_id
 
         return None
 
     def remove_connection(self, connection_id: str):
         if connection_id in self.environment.connections:
-            self.save_state("Remove connection")
             self.environment.remove_connection(connection_id)
-    
-    def _remove_object_connections(self, obj_id: str):
-        connections_to_remove = []
-        
-        for connection_id, connection in self.environment.connections.items():
-            if connection.source_id == obj_id or connection.target_id == obj_id:
-                connections_to_remove.append(connection_id)
-        
-        for connection_id in connections_to_remove:
-            self.remove_connection(connection_id)
+            self.save_state("Remove connection")
     
     def save_state(self, description=""):
         if self.history_position < len(self.history) - 1:
@@ -90,11 +94,19 @@ class SandboxManager:
     
     def can_redo(self):
         return self.history_position < len(self.history) - 1
+
+    def _remove_object_connections(self, obj_id: str):
+        connections_to_remove = [
+            connection_id
+            for connection_id, connection in self.environment.connections.items()
+            if connection.source_id == obj_id or connection.target_id == obj_id
+        ]
+
+        for connection_id in connections_to_remove:
+            self.environment.remove_connection(connection_id)
     
     def add_object(self, obj_type: ObjectType, position, name: str = None, 
                   properties: dict = None, parent_id: str = None) -> SandboxObject:
-        self.save_state(f"Add {obj_type.value} object")
-        
         obj = SandboxObjectFactory.create_object(obj_type, position, name, properties)
         self.environment.add_object(obj)
         
@@ -103,31 +115,21 @@ class SandboxManager:
             if obj_type in SandboxObjectFactory.get_allowed_children(parent.object_type):
                 parent.add_child(obj.id)
                 obj.parent_id = parent_id
+
+        self.save_state(f"Add {obj_type.value} object")
         
         return obj
     
     def remove_object(self, obj_id: str):
         if obj_id in self.environment.objects:
             obj = self.environment.objects[obj_id]
-            self.save_state(f"Remove {obj.object_type.value} object")
-            
             self._remove_object_connections(obj_id)
             
             if obj.parent_id and obj.parent_id in self.environment.objects:
                 self.environment.objects[obj.parent_id].remove_child(obj_id)
             
             self.environment.remove_object(obj_id)
-    
-    def _remove_object_connections(self, obj_id: str):
-        connections_to_remove = []
-        
-        for other_obj_id, other_obj in self.environment.objects.items():
-            for connection_id in list(other_obj.connections):
-                if obj_id in connection_id:
-                    connections_to_remove.append((other_obj_id, connection_id))
-        
-        for other_obj_id, connection_id in connections_to_remove:
-            self.environment.objects[other_obj_id].remove_connection(connection_id)
+            self.save_state(f"Remove {obj.object_type.value} object")
     
     def set_parent(self, child_id: str, parent_id: str):
         if (child_id in self.environment.objects and 
@@ -138,14 +140,16 @@ class SandboxManager:
             
             if child.object_type not in SandboxObjectFactory.get_allowed_children(parent.object_type):
                 raise ValueError(f"Cannot add {child.object_type.value} as child of {parent.object_type.value}")
-            
-            self.save_state(f"Set parent for {child.object_type.value}")
+
+            if child.parent_id == parent_id:
+                return
             
             if child.parent_id and child.parent_id in self.environment.objects:
                 self.environment.objects[child.parent_id].remove_child(child_id)
 
             parent.add_child(child_id)
             child.parent_id = parent_id
+            self.save_state(f"Set parent for {child.object_type.value}")
     
     def update_object_properties(self, obj_id: str, properties: dict):
         if obj_id in self.environment.objects:
@@ -158,8 +162,8 @@ class SandboxManager:
                 self.save_state(f"Update {obj.object_type.value} properties")
     
     def clear_environment(self):
-        self.save_state("Clear environment")
         self.environment = SandboxEnvironment()
+        self.reset_history("New sandbox")
     
     def get_object_tree(self, root_id: str = None) -> list:
         if not root_id:

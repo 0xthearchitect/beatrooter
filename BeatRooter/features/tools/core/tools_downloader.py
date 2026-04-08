@@ -28,6 +28,11 @@ class InstallationThread(QThread):
         self.installer_dir = self.repo_root / "toolInstallerScripts"
         self.installer_scripts_dir = self.installer_dir / "individualInstallers"
         self.installer_config = self._load_installer_config()
+        self.installed_tools = []
+        self.failed_tools = []
+        self.manual_tools = {}
+        self._current_tool = None
+        self._current_outcome = None
 
     def _normalize_tool_name(self, tool_name):
         aliases = {
@@ -71,7 +76,6 @@ class InstallationThread(QThread):
 
     def run(self):
         try:
-            success_count = 0
             total_tools = len(self.tools_to_install)
 
             for i, tool_name in enumerate(self.tools_to_install, 1):
@@ -79,16 +83,19 @@ class InstallationThread(QThread):
                 self.progress_updated.emit(progress, f"Instalando {tool_name}...")
                 
                 install_method = self._resolve_install_method(tool_name)
-                
-                if self.install_tool(tool_name, install_method):
-                    success_count += 1
+                outcome = self.install_tool(tool_name, install_method)
+                if outcome == "installed":
+                    self.installed_tools.append(tool_name)
                     self.log_message.emit(f"{tool_name} instalado com sucesso")
+                elif outcome == "manual":
+                    self.log_message.emit(f"{tool_name} requer instalação manual")
                 else:
+                    self.failed_tools.append(tool_name)
                     self.log_message.emit(f"Falha ao instalar {tool_name}")
 
             self.installation_finished.emit(
-                success_count > 0,
-                f"Instalação concluída: {success_count}/{total_tools} ferramentas"
+                bool(self.installed_tools) and not self.failed_tools and not self.manual_tools,
+                self._build_completion_message(total_tools)
             )
 
         except Exception as e:
@@ -96,20 +103,49 @@ class InstallationThread(QThread):
             self.installation_finished.emit(False, f"Erro: {str(e)}")
 
     def install_tool(self, tool_name, method):
+        self._current_tool = self._normalize_tool_name(tool_name)
+        self._current_outcome = None
         try:
-            tool_name = self._normalize_tool_name(tool_name)
+            tool_name = self._current_tool
             if method == 'native':
-                return self.install_native(tool_name)
+                result = self.install_native(tool_name)
+            elif method == 'aur':
+                result = self.install_via_aur(tool_name)
+            elif method == 'local':
+                result = self.install_local_user_tool(tool_name)
             elif method == 'wsl':
-                return self.install_via_wsl(tool_name)
+                result = self.install_via_wsl(tool_name)
             elif method == 'python':
-                return self.install_via_pip(tool_name)
+                result = self.install_via_pip(tool_name)
             else:
-                return False
+                result = False
+
+            if result:
+                return "installed"
+            return self._current_outcome or "failed"
                 
         except Exception as e:
             self.log_message.emit(f"Erro ao instalar {tool_name}: {str(e)}")
-            return False
+            return "failed"
+
+    def _mark_manual_required(self, note=None):
+        self._current_outcome = "manual"
+        if self._current_tool:
+            self.manual_tools[self._current_tool] = note or self.manual_tools.get(self._current_tool)
+
+    def _build_completion_message(self, total_tools):
+        installed_count = len(self.installed_tools)
+        manual_count = len(self.manual_tools)
+        failed_count = len(self.failed_tools)
+
+        lines = [f"Instalação concluída: {installed_count}/{total_tools} instaladas automaticamente."]
+        if manual_count:
+            lines.append(f"{manual_count} requerem ação manual.")
+            for tool_name, note in self.manual_tools.items():
+                lines.append(f"- {tool_name}: {note or 'instalação manual necessária'}")
+        if failed_count:
+            lines.append(f"{failed_count} falharam sem alternativa automática clara: {', '.join(self.failed_tools)}")
+        return "\n".join(lines)
 
     def install_native(self, tool_name):
         system = platform.system().lower()
@@ -161,15 +197,13 @@ class InstallationThread(QThread):
         if tool_name in manual_tools:
             self.log_message.emit(f"{tool_name} requer download manual:")
             self.log_message.emit(f"{manual_tools[tool_name]}")
+            self._mark_manual_required(manual_tools[tool_name])
             return False
 
         self.log_message.emit(f"{tool_name} não suportado para instalação nativa no Windows")
         return False
 
     def install_linux_native(self, tool_name):
-        if self.install_via_toolinstaller_script(tool_name):
-            return True
-
         if tool_name == 'sublist3r':
             return self.install_via_pip(tool_name)
 
@@ -180,14 +214,23 @@ class InstallationThread(QThread):
                 return self.install_via_pip(tool_name)
             return False
 
+        self.log_message.emit(f"Distribuição detetada via gestor: {package_manager}")
+
+        if self._can_manage_linux_packages(package_manager) and self.install_via_toolinstaller_script(tool_name):
+            return True
+
         package_name = self._get_linux_package_name(tool_name, package_manager)
         if not package_name:
-            self.log_message.emit(f"{tool_name} não tem mapeamento para {package_manager}.")
+            self.log_message.emit(f"{tool_name} não tem mapeamento oficial para {package_manager}.")
+            self._log_linux_install_hint(tool_name, package_manager)
             if tool_name in {'sublist3r', 'whois'}:
                 return self.install_via_pip(tool_name)
             return False
 
-        self.log_message.emit(f"Distribuição detetada via gestor: {package_manager}")
+        if not self._can_manage_linux_packages(package_manager):
+            self._log_linux_privilege_issue(tool_name, package_manager, package_name)
+            return False
+
         update_cmd = self._get_linux_update_command(package_manager)
         install_cmd = self._get_linux_install_command(package_manager, package_name)
 
@@ -196,7 +239,8 @@ class InstallationThread(QThread):
         if not self._run_linux_privileged_command(install_cmd, package_manager, timeout=240):
             return False
 
-        if self.verify_system_installation(tool_name):
+        entry = self._get_installer_entry(tool_name)
+        if (entry and self.verify_installation_from_entry(entry)) or self.verify_system_installation(tool_name):
             self.log_message.emit(f"{tool_name} instalado com sucesso")
             return True
 
@@ -404,6 +448,244 @@ class InstallationThread(QThread):
         self.log_message.emit(f"Todos os métodos pip falharam para {tool_name}")
         return False
 
+    def install_via_aur(self, tool_name):
+        if platform.system().lower() != "linux":
+            self.log_message.emit("A instalação via AUR só está disponível no Linux.")
+            return False
+
+        if not self._command_exists('yay'):
+            self.log_message.emit("O helper AUR `yay` não está disponível.")
+            self._mark_manual_required("Instale `yay` ou use clone/manual para esta ferramenta.")
+            return False
+
+        aur_packages = {
+            'steghide': 'steghide',
+            'enum4linux': 'enum4linux-git',
+            'patator': 'patator',
+            'whatweb': 'whatweb',
+        }
+        package_name = aur_packages.get(tool_name)
+        if not package_name:
+            self.log_message.emit(f"{tool_name} não está configurado para instalação via AUR.")
+            return False
+
+        cmd = ['yay', '-S', '--noconfirm', package_name]
+        if self._run_command(cmd, timeout=1200) and self.verify_system_installation(tool_name):
+            return True
+
+        self._mark_manual_required(f"A instalação via AUR (`yay -S {package_name}`) falhou; verifique o log.")
+        return False
+
+    def install_local_user_tool(self, tool_name):
+        if platform.system().lower() != "linux":
+            self.log_message.emit("A instalação local de utilizador está disponível apenas no Linux.")
+            return False
+
+        installers = {
+            'cupp': self._install_local_cupp,
+            'linpeas': self._install_local_linpeas,
+            'patator': self._install_local_patator,
+            'revshellgen': self._install_local_revshellgen,
+            'whatweb': self._install_local_whatweb,
+        }
+        installer = installers.get(tool_name)
+        if installer is None:
+            self.log_message.emit(f"{tool_name} não tem instalador local configurado.")
+            return False
+
+        home = Path.home()
+        local_bin = home / '.local' / 'bin'
+        local_opt = home / 'opt'
+        local_bin.mkdir(parents=True, exist_ok=True)
+        local_opt.mkdir(parents=True, exist_ok=True)
+
+        if installer(local_bin, local_opt):
+            return self.verify_system_installation(tool_name)
+        return False
+
+    def _run_local_install_command(self, cmd, cwd=None, timeout=600):
+        location = str(cwd) if cwd else None
+        self.log_message.emit(f"Comando local: {' '.join(cmd)}")
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                cwd=location,
+            )
+        except subprocess.TimeoutExpired:
+            self.log_message.emit("Timeout ao executar comando local")
+            return False
+        except Exception as exc:
+            self.log_message.emit(f"Erro ao executar comando local: {exc}")
+            return False
+
+        if result.stdout and result.stdout.strip():
+            self.log_message.emit(result.stdout.strip())
+        if result.stderr and result.stderr.strip():
+            self.log_message.emit(result.stderr.strip())
+        return result.returncode == 0
+
+    def _write_user_wrapper(self, destination, script_body):
+        try:
+            destination.write_text(script_body, encoding='utf-8')
+            destination.chmod(0o755)
+            return True
+        except Exception as exc:
+            self.log_message.emit(f"Erro ao criar wrapper {destination}: {exc}")
+            return False
+
+    def _mark_local_path_hint(self):
+        local_bin = Path.home() / '.local' / 'bin'
+        path_parts = os.environ.get('PATH', '').split(os.pathsep)
+        if str(local_bin) not in path_parts:
+            self.log_message.emit(f"Sugestão: adicione {local_bin} ao PATH se ainda não estiver disponível nesta sessão.")
+
+    def _install_local_cupp(self, local_bin, local_opt):
+        target_dir = local_opt / 'cupp'
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        if not self._run_local_install_command(['git', 'clone', 'https://github.com/Mebus/cupp.git', str(target_dir)], timeout=900):
+            self._mark_manual_required("Clone manual: git clone https://github.com/Mebus/cupp.git ~/opt/cupp")
+            return False
+
+        wrapper = local_bin / 'cupp'
+        if not self._write_user_wrapper(wrapper, '#!/bin/sh\nexec python3 "$HOME/opt/cupp/cupp.py" "$@"\n'):
+            return False
+        self._mark_local_path_hint()
+        return True
+
+    def _install_local_linpeas(self, local_bin, local_opt):
+        target_file = local_opt / 'linpeas.sh'
+        if not self._run_local_install_command(
+            ['curl', '-L', 'https://github.com/peass-ng/PEASS-ng/releases/latest/download/linpeas.sh', '-o', str(target_file)],
+            timeout=900,
+        ):
+            self._mark_manual_required("Download manual: curl -L .../linpeas.sh -o ~/opt/linpeas.sh")
+            return False
+
+        try:
+            target_file.chmod(0o755)
+            wrapper = local_bin / 'linpeas'
+            if wrapper.exists() or wrapper.is_symlink():
+                wrapper.unlink()
+            wrapper.symlink_to(target_file)
+        except Exception as exc:
+            self.log_message.emit(f"Erro ao preparar linpeas local: {exc}")
+            return False
+
+        self._mark_local_path_hint()
+        return True
+
+    def _install_local_patator(self, local_bin, local_opt):
+        if not self._command_exists('git'):
+            self.log_message.emit("Patator local requer `git` instalado no sistema.")
+            self._mark_manual_required("Instale `git`, depois use a instalação local do Patator.")
+            return False
+        if not self._command_exists('python3'):
+            self.log_message.emit("Patator local requer `python3` instalado no sistema.")
+            self._mark_manual_required("Instale `python3`, depois use a instalação local do Patator.")
+            return False
+
+        target_dir = local_opt / 'patator'
+        venv_dir = local_opt / 'patator-venv'
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        if venv_dir.exists():
+            shutil.rmtree(venv_dir)
+
+        if not self._run_local_install_command(['git', 'clone', 'https://github.com/lanjelot/patator.git', str(target_dir)], timeout=900):
+            self._mark_manual_required("Clone manual: git clone https://github.com/lanjelot/patator.git ~/opt/patator")
+            return False
+
+        if not self._run_local_install_command(['python3', '-m', 'venv', str(venv_dir)], timeout=900):
+            self._mark_manual_required("Crie um venv manualmente: python3 -m venv ~/opt/patator-venv")
+            return False
+
+        pip_path = venv_dir / 'bin' / 'pip'
+        python_path = venv_dir / 'bin' / 'python'
+        if not pip_path.exists() or not python_path.exists():
+            self.log_message.emit("Não foi possível preparar o ambiente virtual do Patator.")
+            return False
+
+        self._run_local_install_command([str(pip_path), 'install', '--upgrade', 'pip', 'setuptools', 'wheel'], timeout=1200)
+        if not self._run_local_install_command([str(pip_path), 'install', '-r', 'requirements.txt'], cwd=target_dir, timeout=1200):
+            self.log_message.emit(
+                "Falha ao instalar todas as dependências do Patator. "
+                "Vou tentar instalar apenas o conjunto base, sem drivers opcionais de bases de dados."
+            )
+            base_requirements = [
+                'paramiko==3.5.1',
+                'pycurl==7.45.4',
+                'ajpy==0.0.5',
+                'impacket==0.12.0',
+                'pycryptodomex==3.21.0',
+                'dnspython==2.7.0',
+                'IPy==1.1',
+                'pysnmp==7.1.16',
+                'telnetlib-313-and-up==3.13.1',
+            ]
+            if not self._run_local_install_command([str(pip_path), 'install'] + base_requirements, timeout=1200):
+                self._mark_manual_required(
+                    "No diretório ~/opt/patator use o venv e instale dependências base; "
+                    "dependências opcionais como `cx_Oracle` podem ser ignoradas."
+                )
+                return False
+            self.log_message.emit(
+                "Patator instalado com dependências base. "
+                "Módulos como `oracle_login`, `mysql_login` e `pgsql_login` podem exigir pacotes extra."
+            )
+
+        wrapper = local_bin / 'patator'
+        script_body = '#!/bin/sh\nexec "$HOME/opt/patator-venv/bin/python" "$HOME/opt/patator/src/patator/patator.py" "$@"\n'
+        if not self._write_user_wrapper(wrapper, script_body):
+            return False
+
+        self._mark_local_path_hint()
+        return True
+
+    def _install_local_revshellgen(self, local_bin, local_opt):
+        target_dir = local_opt / 'revshellgen'
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        if not self._run_local_install_command(['git', 'clone', 'https://github.com/t0thkr1s/revshellgen.git', str(target_dir)], timeout=900):
+            self._mark_manual_required("Clone manual: git clone https://github.com/t0thkr1s/revshellgen.git ~/opt/revshellgen")
+            return False
+
+        wrapper = local_bin / 'revshellgen'
+        if not self._write_user_wrapper(wrapper, '#!/bin/sh\nexec python3 "$HOME/opt/revshellgen/revshellgen.py" "$@"\n'):
+            return False
+        self._mark_local_path_hint()
+        return True
+
+    def _install_local_whatweb(self, local_bin, local_opt):
+        if not self._command_exists('ruby') or not self._command_exists('bundle'):
+            self.log_message.emit("WhatWeb local requer `ruby` e `bundle` instalados no sistema.")
+            self._mark_manual_required("Instale `ruby` e `ruby-bundler`, depois use a instalação local do WhatWeb.")
+            return False
+
+        target_dir = local_opt / 'WhatWeb'
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        if not self._run_local_install_command(['git', 'clone', 'https://github.com/urbanadventurer/WhatWeb.git', str(target_dir)], timeout=900):
+            self._mark_manual_required("Clone manual: git clone https://github.com/urbanadventurer/WhatWeb.git ~/opt/WhatWeb")
+            return False
+
+        if not self._run_local_install_command(['bundle', 'config', 'set', 'path', 'vendor/bundle'], cwd=target_dir, timeout=1200):
+            self._mark_manual_required("No diretório do WhatWeb execute: bundle config set path vendor/bundle")
+            return False
+
+        if not self._run_local_install_command(['bundle', 'install'], cwd=target_dir, timeout=1200):
+            self._mark_manual_required("No diretório do WhatWeb execute: bundle config set path vendor/bundle && bundle install")
+            return False
+
+        wrapper = local_bin / 'whatweb'
+        if not self._write_user_wrapper(wrapper, '#!/bin/sh\nexec ruby "$HOME/opt/WhatWeb/whatweb" "$@"\n'):
+            return False
+        self._mark_local_path_hint()
+        return True
+
     def verify_pip_installation(self, tool_name):
         verification_commands = {
             'sublist3r': [sys.executable, '-c', 'import sublist3r; print("OK")'],
@@ -480,22 +762,64 @@ class InstallationThread(QThread):
             'whois': {'apt-get': 'whois', 'apt': 'whois', 'dnf': 'whois', 'yum': 'whois', 'pacman': 'whois', 'zypper': 'whois', 'apk': 'whois'},
             'dnsutils': {'apt-get': 'dnsutils', 'apt': 'dnsutils', 'dnf': 'bind-utils', 'yum': 'bind-utils', 'pacman': 'bind', 'zypper': 'bind-utils', 'apk': 'bind-tools'},
             'binwalk': {'apt-get': 'binwalk', 'apt': 'binwalk', 'dnf': 'binwalk', 'yum': 'binwalk', 'pacman': 'binwalk', 'zypper': 'binwalk', 'apk': 'binwalk'},
-            'enum4linux': {'apt-get': 'enum4linux', 'apt': 'enum4linux', 'dnf': 'enum4linux', 'yum': 'enum4linux', 'pacman': 'enum4linux', 'zypper': 'enum4linux', 'apk': 'enum4linux'},
+            'enum4linux': {'apt-get': 'enum4linux', 'apt': 'enum4linux', 'dnf': 'enum4linux', 'yum': 'enum4linux', 'zypper': 'enum4linux', 'apk': 'enum4linux'},
+            'ghidra': {'apt-get': 'ghidra', 'apt': 'ghidra', 'dnf': 'ghidra', 'yum': 'ghidra', 'pacman': 'ghidra', 'zypper': 'ghidra', 'apk': 'ghidra'},
             'hashcat': {'apt-get': 'hashcat', 'apt': 'hashcat', 'dnf': 'hashcat', 'yum': 'hashcat', 'pacman': 'hashcat', 'zypper': 'hashcat', 'apk': 'hashcat'},
             'hydra': {'apt-get': 'hydra', 'apt': 'hydra', 'dnf': 'hydra', 'yum': 'hydra', 'pacman': 'hydra', 'zypper': 'hydra', 'apk': 'hydra'},
             'john': {'apt-get': 'john', 'apt': 'john', 'dnf': 'john', 'yum': 'john', 'pacman': 'john', 'zypper': 'john', 'apk': 'john'},
             'netcat': {'apt-get': 'netcat-openbsd', 'apt': 'netcat-openbsd', 'dnf': 'nmap-ncat', 'yum': 'nmap-ncat', 'pacman': 'openbsd-netcat', 'zypper': 'netcat-openbsd', 'apk': 'netcat-openbsd'},
-            'patator': {'apt-get': 'patator', 'apt': 'patator', 'dnf': 'patator', 'yum': 'patator', 'pacman': 'patator', 'zypper': 'patator', 'apk': 'patator'},
+            'patator': {'apt-get': 'patator', 'apt': 'patator', 'dnf': 'patator', 'yum': 'patator', 'zypper': 'patator', 'apk': 'patator'},
             'rpcclient': {'apt-get': 'samba-common-bin', 'apt': 'samba-common-bin', 'dnf': 'samba-common-tools', 'yum': 'samba-common-tools', 'pacman': 'smbclient', 'zypper': 'samba-client', 'apk': 'samba-client'},
             'searchsploit': {'apt-get': 'exploitdb', 'apt': 'exploitdb', 'dnf': 'exploitdb', 'yum': 'exploitdb', 'pacman': 'exploitdb', 'zypper': 'exploitdb', 'apk': 'exploitdb'},
             'sqlmap': {'apt-get': 'sqlmap', 'apt': 'sqlmap', 'dnf': 'sqlmap', 'yum': 'sqlmap', 'pacman': 'sqlmap', 'zypper': 'sqlmap', 'apk': 'sqlmap'},
-            'steghide': {'apt-get': 'steghide', 'apt': 'steghide', 'dnf': 'steghide', 'yum': 'steghide', 'pacman': 'steghide', 'zypper': 'steghide', 'apk': 'steghide'},
+            'steghide': {'apt-get': 'steghide', 'apt': 'steghide', 'dnf': 'steghide', 'yum': 'steghide', 'zypper': 'steghide', 'apk': 'steghide'},
             'strings': {'apt-get': 'binutils', 'apt': 'binutils', 'dnf': 'binutils', 'yum': 'binutils', 'pacman': 'binutils', 'zypper': 'binutils', 'apk': 'binutils'},
             'tshark': {'apt-get': 'tshark', 'apt': 'tshark', 'dnf': 'wireshark-cli', 'yum': 'wireshark-cli', 'pacman': 'wireshark-cli', 'zypper': 'wireshark', 'apk': 'tshark'},
-            'whatweb': {'apt-get': 'whatweb', 'apt': 'whatweb', 'dnf': 'whatweb', 'yum': 'whatweb', 'pacman': 'whatweb', 'zypper': 'whatweb', 'apk': 'whatweb'},
+            'whatweb': {'apt-get': 'whatweb', 'apt': 'whatweb', 'dnf': 'whatweb', 'yum': 'whatweb', 'zypper': 'whatweb', 'apk': 'whatweb'},
             'wifite': {'apt-get': 'wifite', 'apt': 'wifite', 'dnf': 'wifite', 'yum': 'wifite', 'pacman': 'wifite', 'zypper': 'wifite', 'apk': 'wifite'},
         }
         return packages.get(tool_name, {}).get(manager)
+
+    def _can_manage_linux_packages(self, manager):
+        if manager not in {'apt-get', 'apt', 'dnf', 'yum', 'pacman', 'zypper', 'apk'}:
+            return True
+        is_root = hasattr(os, 'geteuid') and os.geteuid() == 0
+        return is_root or self._can_use_sudo_non_interactive()
+
+    def _get_linux_install_hint(self, tool_name, manager, package_name=None):
+        if manager != 'pacman':
+            if package_name:
+                return f"Instale manualmente com privilégios: sudo {manager} ... {package_name}"
+            return None
+
+        pacman_hints = {
+            'cupp': "No Arch, use instalação manual do projeto ou AUR equivalente (`cupp-v3`).",
+            'enum4linux': "No Arch, use AUR (`enum4linux-git`) ou clone manual do projeto.",
+            'linpeas': "No Arch, use instalação manual a partir do projeto PEASS-ng.",
+            'patator': "No Arch, use AUR (`patator`) ou clone manual do projeto.",
+            'revshellgen': "No Arch, use clone manual do projeto oficial.",
+            'steghide': "No Arch, `steghide` não costuma estar no repositório oficial; prefira AUR ou instalação manual.",
+            'whatweb': "No Arch, use AUR (`whatweb`) ou instalação manual com Ruby/bundle.",
+        }
+        if tool_name in pacman_hints:
+            return pacman_hints[tool_name]
+        if package_name:
+            return f"Instale manualmente com privilégios: sudo pacman -S --needed {package_name}"
+        return None
+
+    def _log_linux_install_hint(self, tool_name, manager, package_name=None):
+        hint = self._get_linux_install_hint(tool_name, manager, package_name)
+        if hint:
+            self.log_message.emit(f"Sugestão: {hint}")
+            self._mark_manual_required(hint)
+
+    def _log_linux_privilege_issue(self, tool_name, manager, package_name):
+        self.log_message.emit(
+            "Este método requer privilégios administrativos. "
+            "sudo não está disponível sem password (ou foi bloqueado)."
+        )
+        self._log_linux_install_hint(tool_name, manager, package_name)
+        self.log_message.emit("Sugestão: execute o BeatRooter como root/admin ou instale manualmente no sistema.")
 
     def _get_linux_update_command(self, manager):
         updates = {
@@ -693,6 +1017,10 @@ class InstallationDialog(QDialog):
         self.selected_tools = missing_tools.copy()
         self.install_methods = {}
         self.setup_ui()
+
+    def _command_exists(self, command_name):
+        from shutil import which
+        return which(command_name) is not None
 
     def setup_ui(self):
         self.setWindowTitle("Instalação de Ferramentas Externas")
@@ -895,10 +1223,13 @@ class InstallationDialog(QDialog):
         system = platform.system().lower()
         methods = []
         
-        base_methods = [
-            {'name': 'Instalação Nativa', 'value': 'native'},
-            {'name': 'Via PIP (Python)', 'value': 'python'}
-        ]
+        base_methods = [{'name': 'Instalação Nativa', 'value': 'native'}]
+
+        if system == "linux" and self._command_exists('yay'):
+            base_methods.append({'name': 'Via AUR (yay)', 'value': 'aur'})
+
+        base_methods.append({'name': 'Instalação Local', 'value': 'local'})
+        base_methods.append({'name': 'Via PIP (Python)', 'value': 'python'})
         
         if system == "windows" and self.is_wsl_available():
             base_methods.append({'name': 'Via WSL (Linux)', 'value': 'wsl'})
@@ -913,6 +1244,10 @@ class InstallationDialog(QDialog):
         system = platform.system().lower()
         
         if system == "linux":
+            if tool_name in ['steghide', 'enum4linux'] and self._command_exists('yay'):
+                return {'name': 'Via AUR (yay)', 'value': 'aur'}
+            if tool_name in ['cupp', 'linpeas', 'patator', 'revshellgen', 'whatweb']:
+                return {'name': 'Instalação Local', 'value': 'local'}
             return {'name': 'Instalação Nativa', 'value': 'native'}
         elif system == "windows":
             if tool_name in ['sublist3r', 'whois']:
@@ -925,6 +1260,10 @@ class InstallationDialog(QDialog):
             return {'name': 'Instalação Nativa', 'value': 'native'}
 
     def is_method_supported(self, tool_name, method):
+        if method == 'aur':
+            return tool_name in ['steghide', 'enum4linux', 'patator', 'whatweb']
+        if method == 'local':
+            return tool_name in ['cupp', 'linpeas', 'patator', 'revshellgen', 'whatweb']
         if method == 'python':
             return tool_name in ['sublist3r', 'whois']
         return True
@@ -1016,9 +1355,9 @@ class InstallationDialog(QDialog):
                                   "Ferramentas instaladas com sucesso!\n"
                                   "As ferramentas estão agora disponíveis para uso.")
         else:
-            QMessageBox.warning(self, "Instalação Interrompida", 
+            QMessageBox.warning(self, "Instalação Concluída com Ações Pendentes", 
                               f"{message}\n\n"
-                              "Pode tentar novamente ou instalar manualmente.")
+                              "Pode concluir manualmente as ferramentas pendentes.")
 
         self.install_btn.setEnabled(True)
         self.cancel_btn.setText("Cancelar")

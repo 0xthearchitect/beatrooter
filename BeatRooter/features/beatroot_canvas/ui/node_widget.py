@@ -26,6 +26,9 @@ from features.tools.core.tool_node_service import ToolNodeService
 class NodeWidget(QGraphicsObject):
     node_updated = pyqtSignal(object)
     connection_started = pyqtSignal(object)
+    duplicate_requested = pyqtSignal(object)
+    move_started = pyqtSignal(object)
+    move_finished = pyqtSignal(object)
     positionChanged = pyqtSignal()
     node_deleted = pyqtSignal(object)
     tool_run_requested = pyqtSignal(object)
@@ -123,6 +126,8 @@ class NodeWidget(QGraphicsObject):
         self._preview_pixmap_cache = None
         self._preview_pixmap_cache_key = None
         self._preview_target_initialized = False
+        self._drag_origin_pos = QPointF()
+        self._move_tracking_active = False
 
         self.setPos(node.position)
 
@@ -282,6 +287,9 @@ class NodeWidget(QGraphicsObject):
         if not icon_path:
             return None
 
+        if str(icon_path).lower().endswith(".svg"):
+            return None
+
         cache_key = (icon_path, int(size))
         if cache_key in self._ICON_PIXMAP_CACHE:
             return self._ICON_PIXMAP_CACHE[cache_key]
@@ -321,6 +329,11 @@ class NodeWidget(QGraphicsObject):
         if not icon_path:
             return False
 
+        svg_renderer = self._get_svg_renderer(icon_path)
+        if svg_renderer is not None:
+            svg_renderer.render(painter, target_rect)
+            return True
+
         icon_pixmap = self._get_node_icon_pixmap(nominal_size)
         if icon_pixmap and not icon_pixmap.isNull():
             draw_rect = QRectF(
@@ -332,10 +345,6 @@ class NodeWidget(QGraphicsObject):
             painter.drawPixmap(draw_rect.toRect(), icon_pixmap)
             return True
 
-        svg_renderer = self._get_svg_renderer(icon_path)
-        if svg_renderer is not None:
-            svg_renderer.render(painter, target_rect)
-            return True
         return False
 
     def boundingRect(self):
@@ -1132,6 +1141,10 @@ class NodeWidget(QGraphicsObject):
         edit_action.triggered.connect(lambda: self.node_updated.emit(self.node))
         menu.addAction(edit_action)
 
+        duplicate_action = QAction("Duplicate Node", self)
+        duplicate_action.triggered.connect(lambda: self.duplicate_requested.emit(self.node))
+        menu.addAction(duplicate_action)
+
         delete_action = QAction("Delete Node", self)
         delete_action.triggered.connect(self.delete_node)
         menu.addAction(delete_action)
@@ -1181,6 +1194,9 @@ class NodeWidget(QGraphicsObject):
                     self.tool_edit_requested.emit(self.node)
                     event.accept()
                     return
+            self._drag_origin_pos = QPointF(self.pos())
+            self._move_tracking_active = True
+            self.move_started.emit(self.node)
             self.node_updated.emit(self.node)
         super().mousePressEvent(event)
 
@@ -1208,6 +1224,9 @@ class NodeWidget(QGraphicsObject):
             event.accept()
             return
         super().mouseReleaseEvent(event)
+        if self._move_tracking_active and event.button() == Qt.MouseButton.LeftButton:
+            self._move_tracking_active = False
+            self.move_finished.emit(self.node)
 
     def hoverMoveEvent(self, event):
         if self._can_resize_preview() and self._is_on_preview_resize_handle(event.pos()):

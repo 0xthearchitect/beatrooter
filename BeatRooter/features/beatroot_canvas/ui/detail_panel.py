@@ -17,7 +17,10 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QPixmap
+from PyQt6.QtGui import QTextDocumentFragment
 from utils.image_utils import ImageUtils
+from features.beatnote.core.beatnote_model import category_label
+from features.beatnote.core.beatnote_service import BeatNoteService, BeatNoteServiceError
 from features.beatroot_canvas.core import NodeFactory
 from features.tools.core.tool_node_service import ToolNodeService
 import os
@@ -55,11 +58,17 @@ class DetailPanel(QWidget):
         "png_info",
         "image_data",
     }
+    INTERNAL_HIDDEN_FIELDS = {
+        "__beatnote_note_id",
+        "__beatnote_note_title",
+    }
     
-    def __init__(self, main_window=None): 
+    def __init__(self, main_window=None, *, beatnote_service=None): 
         super().__init__()
         self.current_node = None
         self.main_window = main_window
+        self.beatnote_service = beatnote_service or BeatNoteService()
+        self._beatnote_cache = {}
         self.tools_widget = None
         self._suppress_history_events = False
         self._pending_history_description = None
@@ -126,32 +135,36 @@ class DetailPanel(QWidget):
         notes_layout.setContentsMargins(10, 15, 10, 15)
         
         self.notes_edit = QTextEdit()
+        self.notes_edit.setObjectName("NodeNotesEditor")
         self.notes_edit.setPlaceholderText("Add investigation notes here...")
-        self.notes_edit.setMaximumHeight(120)
+        self.notes_edit.setMinimumHeight(160)
+        self.notes_edit.setMaximumHeight(240)
         self.notes_edit.textChanged.connect(self.on_notes_changed)
         notes_layout.addWidget(self.notes_edit)
+
+        beatnote_assoc_row = QHBoxLayout()
+        beatnote_assoc_row.setSpacing(6)
+
+        self.beatnote_link_combo = NoWheelComboBox()
+        self.beatnote_link_combo.setObjectName("BeatNoteAssociateCombo")
+        self.beatnote_link_combo.setMinimumHeight(30)
+        beatnote_assoc_row.addWidget(self.beatnote_link_combo, 1)
+
+        self.beatnote_link_btn = QPushButton("Associate")
+        self.beatnote_link_btn.setObjectName("BeatNoteAssociateButton")
+        self.beatnote_link_btn.setMinimumHeight(30)
+        self.beatnote_link_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.beatnote_link_btn.clicked.connect(self.associate_selected_beatnote)
+        beatnote_assoc_row.addWidget(self.beatnote_link_btn)
+
+        notes_layout.addLayout(beatnote_assoc_row)
+
+        self.associated_beatnote_label = QLabel("Associated BeatNote: none")
+        self.associated_beatnote_label.setObjectName("AssociatedBeatNoteLabel")
+        notes_layout.addWidget(self.associated_beatnote_label)
         
         self.content_layout.addWidget(notes_group)
         
-        # Actions
-        actions_group = QGroupBox("Actions")
-        actions_group.setObjectName("ActionsGroup")
-        actions_layout = QVBoxLayout(actions_group)
-        actions_layout.setContentsMargins(10, 15, 10, 15)
-        actions_layout.setSpacing(8)
-        
-        self.save_btn = QPushButton("Save Changes")
-        self.save_btn.setObjectName("SaveNodeBtn")
-        self.save_btn.clicked.connect(self.save_changes)
-        self.delete_btn = QPushButton("Delete Node")
-        self.delete_btn.setObjectName("DeleteNodeBtn")
-        self.delete_btn.clicked.connect(self.delete_node)
-        
-        actions_layout.addWidget(self.save_btn)
-        actions_layout.addWidget(self.delete_btn)
-        
-        self.content_layout.addWidget(actions_group)
-
         self.content_layout.addStretch()
         
         scroll_area.setWidget(scroll_widget)
@@ -283,10 +296,21 @@ class DetailPanel(QWidget):
         self.main_window.update_undo_redo_buttons()
         self._pending_history_description = None
 
+    def commit_history(self, description):
+        if self._suppress_history_events:
+            return
+        if not hasattr(self, 'main_window') or not self.main_window:
+            return
+        self._history_timer.stop()
+        self._pending_history_description = None
+        self.main_window.graph_manager.save_state(description)
+        self.main_window.update_undo_redo_buttons()
+
     def display_node(self, node):
         self.current_node = node
         self._suppress_history_events = True
         try:
+            self.refresh_beatnote_link_options()
             self.node_type_label.setText(node.type.upper())
             self.node_id_label.setText(node.id)
 
@@ -296,6 +320,8 @@ class DetailPanel(QWidget):
                 if key == 'notes':
                     self.notes_edit.setPlainText(str(value))
                 else:
+                    if key in self.INTERNAL_HIDDEN_FIELDS:
+                        continue
                     if ToolNodeService.is_tool_node(node) and key in self.TOOL_NODE_HIDDEN_FIELDS:
                         continue
                     self.create_data_field(key, value)
@@ -317,8 +343,6 @@ class DetailPanel(QWidget):
                 self.data_layout.addRow("Output:", output_btn)
             
             self.data_group.setVisible(True)
-            self.save_btn.setEnabled(True)
-            self.delete_btn.setEnabled(True)
         finally:
             self._suppress_history_events = False
     
@@ -551,6 +575,7 @@ class DetailPanel(QWidget):
             self.display_node(self.current_node)
             
             self.create_image_preview(file_path)
+            self.commit_history(f"Update {self.current_node.type} node")
             
             self.node_data_updated.emit(self.current_node)
             
@@ -708,6 +733,7 @@ class DetailPanel(QWidget):
         if self.current_node:
             self.current_node.data.update(updated_data)
             self.display_node(self.current_node)
+            self.commit_history(f"Update {self.current_node.type} node")
             self.node_data_updated.emit(self.current_node)
 
     def on_credential_type_changed(self, new_type):
@@ -757,9 +783,79 @@ class DetailPanel(QWidget):
         
         self.data_fields.clear()
         self.notes_edit.clear()
+        self.refresh_beatnote_link_options()
+        self.associated_beatnote_label.setText("Associated BeatNote: none")
         self.data_group.setVisible(False)
-        self.save_btn.setEnabled(False)
-        self.delete_btn.setEnabled(False)
+
+    def _beatnote_plain_text(self, raw_content):
+        text = QTextDocumentFragment.fromHtml(str(raw_content or "")).toPlainText().strip()
+        return text if text else str(raw_content or "").strip()
+
+    def refresh_beatnote_link_options(self):
+        if not hasattr(self, "beatnote_link_combo"):
+            return
+
+        self.beatnote_link_combo.blockSignals(True)
+        self.beatnote_link_combo.clear()
+        self._beatnote_cache = {}
+        self.beatnote_link_combo.addItem("Select BeatNote…", "")
+
+        try:
+            notes = self.beatnote_service.list()
+        except BeatNoteServiceError:
+            notes = []
+
+        for note in notes:
+            label = f"{note.title} · {category_label(note.category)}"
+            self.beatnote_link_combo.addItem(label, note.id)
+            self._beatnote_cache[note.id] = note
+
+        selected_note_id = ""
+        if self.current_node is not None:
+            selected_note_id = str(self.current_node.data.get("__beatnote_note_id", "") or "").strip()
+
+        combo_index = self.beatnote_link_combo.findData(selected_note_id) if selected_note_id else -1
+        self.beatnote_link_combo.setCurrentIndex(combo_index if combo_index >= 0 else 0)
+        self.beatnote_link_combo.setEnabled(bool(notes))
+        if hasattr(self, "beatnote_link_btn"):
+            self.beatnote_link_btn.setEnabled(bool(notes))
+
+        self._refresh_associated_beatnote_label()
+        self.beatnote_link_combo.blockSignals(False)
+
+    def _refresh_associated_beatnote_label(self):
+        if self.current_node is None:
+            self.associated_beatnote_label.setText("Associated BeatNote: none")
+            return
+
+        title = str(self.current_node.data.get("__beatnote_note_title", "") or "").strip()
+        self.associated_beatnote_label.setText(
+            f"Associated BeatNote: {title}" if title else "Associated BeatNote: none"
+        )
+
+    def associate_selected_beatnote(self):
+        if not self.current_node:
+            return
+
+        note_id = str(self.beatnote_link_combo.currentData() or "").strip()
+        if not note_id:
+            return
+
+        note = self._beatnote_cache.get(note_id)
+        if note is None:
+            return
+
+        title = str(getattr(note, "title", "") or "").strip() or "BeatNote"
+        plain_text = self._beatnote_plain_text(getattr(note, "content", ""))
+
+        self.current_node.data["__beatnote_note_id"] = note_id
+        self.current_node.data["__beatnote_note_title"] = title
+        self.notes_edit.setPlainText(plain_text)
+        self._refresh_associated_beatnote_label()
+
+        status = getattr(self.main_window, "statusBar", None)
+        if callable(status) and status() is not None:
+            status().showMessage(f"Associated '{title}' with this node")
     
     def on_field_changed(self):
         if not self.current_node:
@@ -806,6 +902,7 @@ class DetailPanel(QWidget):
             else:
                 self.current_node.data[key] = value
 
+        self.node_data_updated.emit(self.current_node)
         self.queue_history_save(f"Update {self.current_node.type} node field: {key}")
 
 
@@ -813,14 +910,5 @@ class DetailPanel(QWidget):
     def on_notes_changed(self):
         if self.current_node:
             self.current_node.data['notes'] = self.notes_edit.toPlainText()
-            self.queue_history_save(f"Update {self.current_node.type} node notes")
-    
-    def save_changes(self):
-        if self.current_node:
-            self.flush_pending_history()
             self.node_data_updated.emit(self.current_node)
-    
-    def delete_node(self):
-        if self.current_node:
-            self.node_deleted.emit(self.current_node)
-            self.clear_panel()
+            self.queue_history_save(f"Update {self.current_node.type} node notes")
