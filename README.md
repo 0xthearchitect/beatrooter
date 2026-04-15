@@ -50,7 +50,7 @@ Made with ☕︎ by:
 
 </div>
 <p align="center">
-  <img src="Assets/reinvicta.svg" alt="logo"/>
+  <img src="assets/reinvicta.svg" alt="logo"/>
 </p>
 
 
