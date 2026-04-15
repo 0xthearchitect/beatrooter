@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
   <title>BeatRooter Pixel Landing</title>
 
   <style>
@@ -120,7 +121,7 @@
       left: 50%;
       transform: translate(-50%, -50%);
       z-index: 10;
-      filter: drop-shadow(4px 4px 0 rgba(0,0,0,0.6));
+      filter: drop-shadow(6px 6px 0 rgba(0,0,0,0.6));
     }
 
     .title img {
@@ -185,6 +186,10 @@
       z-index: 4; /* atrás do chão */
       display: block;
       text-decoration: none;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      cursor: pointer;
     }
 
     .plant {
@@ -267,6 +272,93 @@
     clip-path: inset(0 0 0% 0); /* deixa de estar cortado */
     }
 
+    .download-options {
+      position: absolute;
+      top: 500px;
+      left: 50%;
+      transform: translateX(-50%) translateY(18px);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 30px;
+      z-index: 18;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 260ms ease, transform 260ms ease;
+    }
+
+    .download-title {
+      color: white;
+      font-family: 'Press Start 2P', monospace;
+      font-size: 50px;
+      letter-spacing: 2px;
+      filter: drop-shadow(6px 6px 0 rgba(0,0,0,0.6));
+    }
+
+    .download-options img {
+      display: block;
+      width: min(320px, 68vw);
+      height: auto;
+      image-rendering: pixelated;
+    }
+
+    .download-option {
+      display: block;
+      transition: transform 160ms ease;
+    }
+
+    .download-option:hover,
+    .download-option:focus-visible {
+      transform: scale(1.05);
+    }
+
+    .plant-link {
+      transition: left 900ms cubic-bezier(0.22, 1, 0.36, 1),
+                  bottom 900ms cubic-bezier(0.22, 1, 0.36, 1),
+                  width 900ms cubic-bezier(0.22, 1, 0.36, 1),
+                  height 900ms cubic-bezier(0.22, 1, 0.36, 1),
+                  z-index 0s linear 900ms;
+      transform-origin: center bottom;
+    }
+
+    .plant {
+      transition: bottom 900ms cubic-bezier(0.22, 1, 0.36, 1),
+                  clip-path 900ms cubic-bezier(0.22, 1, 0.36, 1),
+                  transform 900ms cubic-bezier(0.22, 1, 0.36, 1);
+      transform-origin: center bottom;
+    }
+
+    .scene.download-active .title,
+    .scene.download-active .menu {
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 220ms ease;
+    }
+
+    .scene.download-active .plant-link {
+      left: 50%;
+      bottom: calc(100% - 460px);
+      width: 160px;
+      height: 320px;
+      z-index: 18;
+    }
+
+    .scene.download-active .plant {
+      bottom: 0;
+      clip-path: inset(0 0 0 0);
+      transform: translateX(-50%) scale(1.65);
+    }
+
+    .scene.download-active .download-arrow {
+      opacity: 0;
+    }
+
+    .scene.show-downloads .download-options {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+    }
+
     @media (max-width: 700px) {
       .title img {
         width: 85vw;
@@ -291,6 +383,22 @@
 
       .theme-toggle img {
         width: 108px;
+      }
+
+      .scene.download-active .plant-link {
+        bottom: calc(100% - 230px);
+        width: 240px;
+        height: 240px;
+      }
+
+      .download-options {
+        top: 185px;
+        width: 100%;
+        padding: 0 18px;
+      }
+
+      .download-options img {
+        width: min(290px, 82vw);
       }
     }
   </style>
@@ -318,10 +426,21 @@
     <div class="ground"></div>
 
     <!-- PLANTA BEATROOTER -->
-    <a class="plant-link" href="assets/beatrooter_pixel.png" download aria-label="Download BeatRooter pixel">
+    <button class="plant-link" id="beatrooterPlant" type="button" aria-label="Abrir opções de download">
       <img src="assets/download.png" class="download-arrow" alt="Download" />
       <img src="assets/beatrooter_pixel.png" class="plant" alt="Beatroot plant" />
-    </a>
+    </button>
+
+    <div class="download-options" id="downloadOptions" aria-hidden="true">
+      <div class="download-title">DOWNLOAD(DEMO)</div>
+
+      <a class="download-option" href="#" aria-label="Download Linux (deb)">
+        <img src="assets/linux_download.png" alt="Linux deb" />
+      </a>
+      <a class="download-option" href="#" aria-label="Download Windows (exe)">
+        <img src="assets/Windows_download.png" alt="Windows exe" />
+      </a>
+    </div>
 
     <a class="patreon-link" href="https://patreon.com" target="_blank" rel="noopener noreferrer" aria-label="Patreon">
       <img src="assets/patreon_pixel.png" class="social-plant" alt="Patreon" />
@@ -379,6 +498,23 @@
 
     toggleButton.addEventListener('click', () => {
       animateThemeSwitch(!isDay);
+    });
+
+    const scene = document.querySelector('.scene');
+    const beatrooterPlant = document.getElementById('beatrooterPlant');
+    const downloadOptions = document.getElementById('downloadOptions');
+    let downloadAnimationStarted = false;
+
+    beatrooterPlant.addEventListener('click', () => {
+      if (downloadAnimationStarted) return;
+      downloadAnimationStarted = true;
+
+      scene.classList.add('download-active');
+
+      window.setTimeout(() => {
+        scene.classList.add('show-downloads');
+        downloadOptions.setAttribute('aria-hidden', 'false');
+      }, 920);
     });
 
     applyTheme(false);
