@@ -22,7 +22,7 @@
 
 MIT License:
 
-[LICENSE.md](LICENSE.md)
+[LICENSE](LICENSE)
 
 ---
 
