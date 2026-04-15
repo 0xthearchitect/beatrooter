@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BeatRooter Pixel Landing</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      --ui-text: #ffffff;
+      --ui-shadow: #000000;
+      --btn-bg: #6d4a91;
+      --btn-bg-hover: #8f63bd;
+      --btn-border: #1a1027;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: monospace;
+      background: #000;
+    }
+
+    body.day {
+      --ui-text: #1d2340;
+      --ui-shadow: rgba(255,255,255,0.35);
+      --btn-bg: #5ea8db;
+      --btn-bg-hover: #7fc0ea;
+      --btn-border: #1c5f8b;
+    }
+
+    .scene {
+      position: relative;
+      width: 100vw;
+      height: 100vh;
+      overflow: hidden;
+      isolation: isolate;
+    }
+
+    .sky,
+    .ground {
+      position: absolute;
+      inset: 0;
+      background-repeat: no-repeat;
+      background-position: center center;
+      background-size: cover;
+      image-rendering: pixelated;
+      transition: opacity 180ms linear;
+      pointer-events: none;
+    }
+
+    .sky-day {
+      background-image: url('assets/Dia_Diurno.png');
+      z-index: 0;
+      opacity: 0;
+    }
+
+    .sky-night {
+      background-image: url('assets/Noite_Estrelada2.png');
+      z-index: 1;
+      opacity: 1;
+    }
+
+    body.day .sky-day {
+      opacity: 1;
+    }
+
+    body.day .sky-night {
+      opacity: 0;
+    }
+
+    .ground {
+      inset: auto 0 0 0;
+      height: 220px;
+      background-image: url('assets/campo.png');
+      background-position: center bottom;
+      z-index: 6;
+    }
+
+    .hud {
+      position: absolute;
+      top: 18px;
+      left: 18px;
+      z-index: 20;
+      color: var(--ui-text);
+      font-size: 13px;
+      line-height: 1.5;
+      text-shadow: 2px 2px 0 var(--ui-shadow);
+      opacity: 0.95;
+    }
+
+    .theme-toggle {
+      position: absolute;
+      top: 18px;
+      right: 18px;
+      z-index: 20;
+      border: 0;
+      background: transparent;
+      padding: 0;
+      cursor: pointer;
+    }
+
+    .theme-toggle img {
+      display: block;
+      width: 140px;
+      height: auto;
+      image-rendering: pixelated;
+    }
+
+    .title {
+      position: absolute;
+      top: 42%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 10;
+      filter: drop-shadow(4px 4px 0 rgba(0,0,0,0.6));
+    }
+
+    .title img {
+      display: block;
+      width: min(70vw, 520px);
+      height: auto;
+      image-rendering: pixelated;
+    }
+
+    .subtitle {
+      position: absolute;
+      top: calc(42% + 70px);
+      left: 50%;
+      transform: translateX(-50%);
+      color: var(--ui-text);
+      font-size: 16px;
+      letter-spacing: 2px;
+      text-shadow: 2px 2px 0 var(--ui-shadow);
+      z-index: 10;
+      white-space: nowrap;
+    }
+
+    .menu {
+      position: absolute;
+      top: calc(42% + 120px);
+      left: 50%;
+      transform: translateX(-50%);
+      display: flex;
+      gap: 14px;
+      z-index: 11;
+    }
+
+    .pixel-btn {
+      border: 3px solid var(--btn-border);
+      background: var(--btn-bg);
+      color: #fff;
+      padding: 12px 20px;
+      text-transform: uppercase;
+      font-size: 14px;
+      letter-spacing: 1px;
+      cursor: pointer;
+      box-shadow: 0 4px 0 var(--btn-border);
+      font-family: inherit;
+    }
+
+    .pixel-btn:hover {
+      background: var(--btn-bg-hover);
+    }
+
+    .pixel-btn:active {
+      transform: translateY(4px);
+      box-shadow: 0 0 0 var(--btn-border);
+    }
+
+    .plant-link {
+      position: absolute;
+      bottom: 10px;
+      left: 15%;
+      transform: translateX(-50%);
+      width: 700px;
+      height: 700px;
+      z-index: 4; /* atrás do chão */
+      display: block;
+      text-decoration: none;
+    }
+
+    .plant {
+      position: absolute;
+      bottom: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 100%;
+      image-rendering: pixelated;
+      pointer-events: none;
+      clip-path: inset(0 0 30% 0);
+    }
+
+    .download-arrow {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -120%); /* acima da planta */
+      width: 200px; /* tamanho mais equilibrado */
+      height: auto;
+      image-rendering: pixelated;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.15s linear;
+    }
+
+    .plant-link:hover .download-arrow,
+    .plant-link:focus-visible .download-arrow {
+      opacity: 1;
+    }
+
+    .patreon-link {
+      position: absolute;
+      bottom: 18px;
+      left: 69%;
+      transform: translateX(-50%);
+      width: 260px;
+      height: 260px;
+      z-index: 4;
+      display: block;
+      text-decoration: none;
+    }
+
+    .github-link {
+      position: absolute;
+      bottom: 18px;
+      left: 84%;
+      transform: translateX(-50%);
+      width: 260px;
+      height: 260px;
+      z-index: 4;
+      display: block;
+      text-decoration: none;
+    }
+
+    .social-plant {
+    position: absolute;
+    bottom: 10%;
+    left: 80%;
+    transform: translateX(-50%) rotate(70deg);
+    width: 130%;
+    image-rendering: pixelated;
+    pointer-events: none;
+
+    /* estado inicial (enterrado) */
+    clip-path: inset(0 0 0% 0);
+
+    transition:
+        transform 0.4s ease,
+        bottom 0.4s ease,
+        clip-path 0.3s ease;
+    }
+
+    .patreon-link:hover .social-plant,
+    .github-link:hover .social-plant {
+    bottom: 180px; /* sobe para fora da terra */
+
+    transform: translateX(-50%) rotate(0deg); /* fica direito */
+
+    clip-path: inset(0 0 0% 0); /* deixa de estar cortado */
+    }
+
+    @media (max-width: 700px) {
+      .title img {
+        width: 85vw;
+      }
+
+      .subtitle {
+        font-size: 12px;
+        white-space: normal;
+        width: 90vw;
+        text-align: center;
+      }
+
+      .menu {
+        flex-wrap: wrap;
+        justify-content: center;
+        width: 90vw;
+      }
+
+      .ground {
+        height: 140px;
+      }
+
+      .theme-toggle img {
+        width: 108px;
+      }
+    }
+  </style>
+</head>
+<body class="night">
+  <main class="scene">
+    <div class="sky sky-day"></div>
+    <div class="sky sky-night"></div>
+
+    <button class="theme-toggle" id="themeToggle" aria-label="Mudar tema" aria-pressed="false">
+      <img id="toggleSprite" src="assets/modo_escuro.png" alt="Switch de tema" />
+    </button>
+
+    <section class="title">
+      <img src="assets/BeatRooter_Title.png" alt="BeatRooter" />
+    </section>
+
+    <p class="subtitle">Uma landing page com vibe retro, noturna e pixel art.</p>
+
+    <nav class="menu">
+      <button class="pixel-btn">Entrar</button>
+      <button class="pixel-btn">Sobre</button>
+      <button class="pixel-btn">Contacto</button>
+    </nav>
+
+    <div class="ground"></div>
+
+    <!-- PLANTA BEATROOTER -->
+    <a class="plant-link" href="assets/beatrooter_pixel.png" download aria-label="Download BeatRooter pixel">
+      <img src="assets/download.png" class="download-arrow" alt="Download" />
+      <img src="assets/beatrooter_pixel.png" class="plant" alt="Beatroot plant" />
+    </a>
+
+    <a class="patreon-link" href="https://patreon.com" target="_blank" rel="noopener noreferrer" aria-label="Patreon">
+      <img src="assets/patreon_pixel.png" class="social-plant" alt="Patreon" />
+    </a>
+
+    <a class="github-link" href="https://github.com" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
+      <img src="assets/github_pixel.png" class="social-plant" alt="GitHub" />
+    </a>
+  </main>
+
+  <script>
+    const body = document.body;
+    const toggleButton = document.getElementById('themeToggle');
+    const toggleSprite = document.getElementById('toggleSprite');
+
+    const framesToNight = [
+      'assets/modo_claro_para_escuro1.png',
+      'assets/modo_claro_para_escuro2.png',
+      'assets/modo_claro_para_escuro3.png',
+      'assets/modo_claro_para_escuro4.png',
+      'assets/modo_claro_para_escuro5.png'
+    ];
+
+    const framesToDay = [...framesToNight].reverse();
+    const FRAME_MS = 90;
+    let isAnimating = false;
+    let isDay = false;
+
+    function sleep(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+
+    function applyTheme(dayMode) {
+      isDay = dayMode;
+      body.classList.toggle('day', dayMode);
+      body.classList.toggle('night', !dayMode);
+      toggleButton.setAttribute('aria-pressed', String(dayMode));
+      toggleSprite.src = dayMode ? 'assets/modo_claro.png' : 'assets/modo_escuro.png';
+    }
+
+    async function animateThemeSwitch(targetDay) {
+      if (isAnimating || targetDay === isDay) return;
+      isAnimating = true;
+
+      const frames = targetDay ? framesToDay : framesToNight;
+
+      for (const frame of frames) {
+        toggleSprite.src = frame;
+        await sleep(FRAME_MS);
+      }
+
+      applyTheme(targetDay);
+      isAnimating = false;
+    }
+
+    toggleButton.addEventListener('click', () => {
+      animateThemeSwitch(!isDay);
+    });
+
+    applyTheme(false);
+  </script>
+</body>
+</html>
