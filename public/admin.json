@@ -1,0 +1,16 @@
+{
+  "users": [
+    { "username": "learchitect", "role": "administrator" },
+    { "username": "ogajodochapeu", "role": "administrator" },
+    { "username": "pai", "role": "administrator" },
+    { "username": "adamastatings", "role": "administrator" },
+    { "username": "beatrooter", "role": "superuser", "level": "master" }
+  ],
+  "api_key": "sk-prod-a8f3k2p9x1m7q4w6n0r5t8y2u",
+  "master_password": "X7#mK9$qP2@wL5!nR4&vJ8*cF3^hD6%tB1~eA0+yN!sQ3@zU6#gW9$bM2^rT5&",
+  "database": {
+    "host": "127.0.0.1",
+    "port": 42069,
+    "name": "r00t_d4t4"
+  }
+}
