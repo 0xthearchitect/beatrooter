@@ -1,0 +1,113 @@
+User-agent: *
+Disallow: /
+
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ChatGPT-User
+Disallow: /
+
+User-agent: Claude-Web
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+User-agent: Google-Extended
+Disallow: /
+
+User-agent: CCBot
+Disallow: /
+
+User-agent: Omgilibot
+Disallow: /
+
+User-agent: FacebookBot
+Disallow: /
+
+User-agent: *
+Disallow: /D0NT
+Disallow: /admin/
+Disallow: /admin-panel/
+Disallow: /wp-admin/
+Disallow: /wp-login.php
+Disallow: /phpmyadmin/
+Disallow: /cpanel/
+
+Disallow: /B3
+Disallow: /backups/
+Disallow: /backup/
+Disallow: /db/
+Disallow: /database/
+Disallow: /config/
+Disallow: /.env
+Disallow: /private/
+Disallow: /secret/
+
+Disallow: /4
+Disallow: /api/v1/internal/
+Disallow: /api/keys/
+Disallow: /api/admin/
+Disallow: /api/debug/
+Disallow: /api/tokens/
+
+Disallow: /SCR1PT
+Disallow: /logs/
+Disallow: /debug/
+Disallow: /test/
+Disallow: /staging/
+Disallow: /old/
+Disallow: /archive/
+
+Disallow: /K1D
+Disallow: /shell/
+Disallow: /ssh/
+Disallow: /upload/
+Disallow: /uploads/
+Disallow: /files/internal/
+Disallow: /credentials/
+Disallow: /passwd
+Disallow: /shadow
+Disallow: /etc/
+
+Disallow: /Y0U
+Disallow: /server-status/
+Disallow: /server-info/
+Disallow: /nginx-status/
+Disallow: /actuator/
+Disallow: /actuator/env
+Disallow: /actuator/health
+
+Disallow: /W0NT
+Disallow: /.git/
+Disallow: /.svn/
+Disallow: /.htaccess
+Disallow: /xmlrpc.php
+Disallow: /cgi-bin/
+Disallow: /composer.json
+Disallow: /package.json
+
+Disallow: /F1ND
+Disallow: /id_rsa
+Disallow: /id_rsa.pub
+Disallow: /.bash_history
+Disallow: /.ssh/
+Disallow: /authorized_keys
+Disallow: /known_hosts
+
+Disallow: /4NYTH1NG
+Disallow: /wp-config.php
+Disallow: /configuration.php
+Disallow: /settings.php
+Disallow: /config.php
+Disallow: /database.yml
+Disallow: /secrets.yml
+
+Disallow: /H3R3
+Disallow: /tmp/
+Disallow: /temp/
+Disallow: /cache/
+Disallow: /swap/
+Disallow: /dump/
+Disallow: /sql/
+Disallow: /xD
