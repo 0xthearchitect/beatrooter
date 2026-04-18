@@ -245,6 +245,41 @@
       text-decoration: none;
     }
 
+    .github-stars {
+      position: absolute;
+      right: 28px;
+      bottom: 820px;
+      z-index: 12;
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-end;
+      width: 170px;
+      aspect-ratio: 371 / 87;
+      padding: 0 18px 0 86px;
+      background: url('assets/count_stars.png') center / contain no-repeat;
+      image-rendering: pixelated;
+      text-decoration: none;
+      color: #ffffff;
+      filter: drop-shadow(4px 4px 0 rgba(0,0,0,0.45));
+      transition: transform 160ms ease;
+    }
+
+    .github-stars:hover,
+    .github-stars:focus-visible {
+      transform: translateY(-2px) scale(1.02);
+    }
+
+    .github-stars-count {
+      display: block;
+      min-width: 62px;
+      text-align: center;
+      font-family: 'Press Start 2P', monospace;
+      font-size: 13px;
+      line-height: 1;
+      letter-spacing: 0;
+      text-shadow: 2px 2px 0 rgba(0,0,0,0.35);
+    }
+
     .social-plant {
     position: absolute;
     bottom: 10%;
@@ -364,6 +399,17 @@
         width: 85vw;
       }
 
+      .github-stars {
+        right: 14px;
+        bottom: 128px;
+        width: 138px;
+        padding: 0 14px 0 68px;
+      }
+
+      .github-stars-count {
+        font-size: 10px;
+      }
+
       .subtitle {
         font-size: 12px;
         white-space: normal;
@@ -446,6 +492,10 @@
       <img src="assets/patreon_pixel.png" class="social-plant" alt="Patreon" />
     </a>
 
+    <a class="github-stars" href="https://github.com/0xthearchitect/beatrooter" target="_blank" rel="noopener noreferrer" aria-label="Ver repositório no GitHub">
+      <span class="github-stars-count" id="githubStarsCount">...</span>
+    </a>
+
     <a class="github-link" href="https://github.com/0xthearchitect/beatrooter" target="_blank" rel="noopener noreferrer" aria-label="GitHub">
       <img src="assets/github_pixel.png" class="social-plant" alt="GitHub" />
     </a>
@@ -503,7 +553,38 @@
     const scene = document.querySelector('.scene');
     const beatrooterPlant = document.getElementById('beatrooterPlant');
     const downloadOptions = document.getElementById('downloadOptions');
+    const githubStarsCount = document.getElementById('githubStarsCount');
+    const githubRepo = '0xthearchitect/beatrooter';
     let downloadAnimationStarted = false;
+
+    function formatStarCount(count) {
+      if (count >= 1000000) {
+        return `${(count / 1000000).toFixed(1).replace('.0', '')}M`;
+      }
+
+      if (count >= 1000) {
+        return `${(count / 1000).toFixed(1).replace('.0', '')}k`;
+      }
+
+      return String(count);
+    }
+
+    async function loadGitHubStars() {
+      if (!githubStarsCount) return;
+
+      try {
+        const response = await fetch(`https://api.github.com/repos/${githubRepo}`);
+
+        if (!response.ok) {
+          throw new Error('GitHub API error');
+        }
+
+        const data = await response.json();
+        githubStarsCount.textContent = formatStarCount(data.stargazers_count ?? 0);
+      } catch (error) {
+        githubStarsCount.textContent = 'Git';
+      }
+    }
 
     beatrooterPlant.addEventListener('click', () => {
       if (downloadAnimationStarted) return;
@@ -517,6 +598,7 @@
       }, 920);
     });
 
+    loadGitHubStars();
     applyTheme(false);
   </script>
 </body>
