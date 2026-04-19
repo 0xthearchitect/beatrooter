@@ -6,8 +6,8 @@ from features.beatroot_canvas.models.node import Node
 from features.beatroot_canvas.models.edge import Edge
 
 class ToolsOutputParser:
-    MAX_SUBLIST3R_VISIBLE_NODES = 10
-    MAX_SUBLIST3R_NOTE_PREVIEW = 80
+    MAX_SUBFINDER_VISIBLE_NODES = 10
+    MAX_SUBFINDER_NOTE_PREVIEW = 80
     MAX_GOBUSTER_VISIBLE_ENDPOINTS = 60
     MAX_GOBUSTER_NOTE_PREVIEW = 80
     GOBUSTER_WILDCARD_SIGNATURE_THRESHOLD = 12
@@ -23,9 +23,12 @@ class ToolsOutputParser:
             'whois': self.parse_whois_output,
             'nslookup': self.parse_nslookup_output,
             'dnsutils': self.parse_nslookup_output,
-            'sublist3r': self.parse_sublist3r_output,
+            'subfinder': self.parse_subfinder_output,
+            'amass': self.parse_amass_output,
+            'sublist3r': self.parse_subfinder_output,
             'exiftool': self.parse_exiftool_output,
             'gobuster': self.parse_gobuster_output,
+            'whatweb': self.parse_whatweb_output,
             'netcat': self.parse_netcat_output,
             'tshark': self.parse_tshark_output,
         }
@@ -37,71 +40,85 @@ class ToolsOutputParser:
     
     def parse_nmap_output(self, output, target=None):
         nodes_created = []
-        
-        host_pattern = r"Nmap scan report for (.+?)\n"
+
+        host_block_pattern = r"(Nmap scan report for .+?)(?=\nNmap scan report for |\nNmap done:|\Z)"
         ip_pattern = r"(\d+\.\d+\.\d+\.\d+)"
-        port_pattern = r"(\d+)/(tcp|udp)\s+(\w+)\s+(.+)"
         os_pattern = r"OS:\s*(.+)"
-        service_pattern = r"(\d+)/(tcp|udp)\s+(\w+)\s+([^\n]+)"
-        
-        hosts = re.findall(host_pattern, output)
-        current_host = None
-        
-        for host in hosts:
-            if re.match(ip_pattern, host):
-                host_data = {
-                    'hostname': '',
-                    'ip_address': host,
-                    'os': '',
-                    'services': [],
-                    'open_ports': 0,
-                    'notes': f"Nmap scan: {target if target else 'unknown'}"
-                }
-            else:
-                ip_match = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", host)
-                ip = ip_match.group(1) if ip_match else ''
-                host_data = {
-                    'hostname': host,
-                    'ip_address': ip,
-                    'os': '',
-                    'services': [],
-                    'open_ports': 0,
-                    'notes': f"Nmap scan: {target if target else 'unknown'}"
-                }
-            
-            host_position = QPointF(len(nodes_created) * 200, 0)
+        service_pattern = r"^(\d+)/(tcp|udp)\s+(\S+)\s+([^\n]+)$"
+
+        host_blocks = re.findall(host_block_pattern, output, flags=re.DOTALL | re.MULTILINE)
+        if not host_blocks:
+            return nodes_created
+
+        host_spacing_x = 280.0
+        host_spacing_y = 230.0
+        service_offset_x = 170.0
+        service_spacing_y = 72.0
+        max_columns = 3
+
+        for host_index, host_block in enumerate(host_blocks):
+            header_line = host_block.splitlines()[0].replace("Nmap scan report for ", "", 1).strip()
+            ip_match = re.search(r"\((\d+\.\d+\.\d+\.\d+)\)", header_line)
+            ip_address = ip_match.group(1) if ip_match else (header_line if re.fullmatch(ip_pattern, header_line) else "")
+            hostname = header_line
+            if ip_match:
+                hostname = header_line.split("(", 1)[0].strip()
+            elif ip_address:
+                hostname = ""
+
+            grid_col = host_index % max_columns
+            grid_row = host_index // max_columns
+            host_position = QPointF(grid_col * host_spacing_x, grid_row * host_spacing_y)
+
+            host_data = {
+                'hostname': hostname,
+                'ip_address': ip_address,
+                'os': '',
+                'services': [],
+                'open_ports': 0,
+                'notes': f"Nmap scan: {target if target else 'unknown'}"
+            }
+
+            os_match = re.search(os_pattern, host_block)
+            if os_match:
+                host_data['os'] = os_match.group(1).strip()
+
             host_node = self.graph_manager.add_node('host', host_position, host_data)
             nodes_created.append(host_node)
-            current_host = host_node
-            
-            os_match = re.search(os_pattern, output)
-            if os_match:
-                current_host.data['os'] = os_match.group(1)
-        
-        port_matches = re.findall(service_pattern, output)
-        for port_match in port_matches:
-            port, protocol, state, service_info = port_match
-            if state.lower() == 'open':
-                if current_host:
-                    current_host.data['open_ports'] = current_host.data.get('open_ports', 0) + 1
-                    
-                    service_data = {
-                        'port': int(port),
-                        'service': service_info.split()[0] if service_info else 'unknown',
-                        'protocol': protocol,
-                        'version': service_info,
-                        'banner': service_info,
-                        'state': 'open',
-                        'notes': f"Discovered via Nmap scan"
-                    }
-                    
-                    service_position = QPointF(current_host.position.x() + 150, 
-                                             current_host.position.y() + len(nodes_created) * 80)
-                    service_node = self.graph_manager.add_node('port_service', service_position, service_data)
-                    nodes_created.append(service_node)
-                    
-                    self.graph_manager.connect_nodes(current_host.id, service_node.id, f"runs_on_port_{port}")
-        
+
+            service_matches = re.findall(service_pattern, host_block, flags=re.MULTILINE)
+            visible_service_index = 0
+            for port, protocol, state, service_info in service_matches:
+                if not str(state).lower().startswith('open'):
+                    continue
+
+                service_name = service_info.split()[0] if service_info else 'unknown'
+                host_reference = ip_address or hostname or (target or 'unknown')
+                service_data = {
+                    'port': int(port),
+                    'service': service_name,
+                    'protocol': protocol,
+                    'version': service_info.strip(),
+                    'banner': service_info.strip(),
+                    'state': state,
+                    'host': host_reference,
+                    'ip_address': ip_address,
+                    'hostname': hostname,
+                    'notes': f"Discovered via Nmap scan on {host_reference}"
+                }
+
+                service_position = QPointF(
+                    host_position.x() + service_offset_x,
+                    host_position.y() + (visible_service_index * service_spacing_y)
+                )
+                service_node = self.graph_manager.add_node('port_service', service_position, service_data)
+                nodes_created.append(service_node)
+                visible_service_index += 1
+
+                host_node.data['open_ports'] = host_node.data.get('open_ports', 0) + 1
+                host_node.data.setdefault('services', []).append(service_name)
+                self.graph_manager.connect_nodes(host_node.id, service_node.id, f"runs_on_port_{port}")
+
         return nodes_created
     
     def parse_masscan_output(self, output, target=None):
@@ -457,31 +474,37 @@ class ToolsOutputParser:
 
         return nodes_created
     
-    def parse_sublist3r_output(self, output, target=None):
+    def parse_subfinder_output(self, output, target=None):
+        return self._parse_subdomain_enumerator_output(output, target, tool_label="Subfinder")
+
+    def parse_amass_output(self, output, target=None):
+        return self._parse_subdomain_enumerator_output(output, target, tool_label="Amass")
+
+    def _parse_subdomain_enumerator_output(self, output, target=None, tool_label="Subdomain Enumerator"):
         nodes_created = []
         
         if not target:
             return nodes_created
 
-        subdomains = self._extract_sublist3r_subdomains(output, target)
+        subdomains = self._extract_subfinder_subdomains(output, target)
         main_domain_data = {
             'name': target,
             'subdomains_found': len(subdomains),
-            'notes': 'Sublist3r enumeration'
+            'notes': f'{tool_label} enumeration'
         }
         
         main_domain_position = QPointF(0, 0)
         main_domain_node = self.graph_manager.add_node('domain', main_domain_position, main_domain_data)
         nodes_created.append(main_domain_node)
 
-        visible_subdomains = subdomains[:self.MAX_SUBLIST3R_VISIBLE_NODES]
-        hidden_subdomains = subdomains[self.MAX_SUBLIST3R_VISIBLE_NODES:]
+        visible_subdomains = subdomains[:self.MAX_SUBFINDER_VISIBLE_NODES]
+        hidden_subdomains = subdomains[self.MAX_SUBFINDER_VISIBLE_NODES:]
 
         for i, subdomain in enumerate(visible_subdomains):
             subdomain_data = {
                 'name': subdomain,
                 'parent_domain': target,
-                'notes': f"Discovered via Sublist3r"
+                'notes': f"Discovered via {tool_label}"
             }
             
             subdomain_position = QPointF(main_domain_position.x() + 200, 
@@ -492,10 +515,10 @@ class ToolsOutputParser:
             self.graph_manager.connect_nodes(main_domain_node.id, subdomain_node.id, "has_subdomain")
 
         if hidden_subdomains:
-            preview = "\n".join(hidden_subdomains[:self.MAX_SUBLIST3R_NOTE_PREVIEW])
+            preview = "\n".join(hidden_subdomains[:self.MAX_SUBFINDER_NOTE_PREVIEW])
             remaining_count = len(hidden_subdomains)
             hidden_note_data = {
-                'title': f'Sublist3r Overflow ({remaining_count})',
+                'title': f'{tool_label} Overflow ({remaining_count})',
                 'content': (
                     f"Target: {target}\n"
                     f"Visible subdomain nodes: {len(visible_subdomains)}\n"
@@ -504,7 +527,7 @@ class ToolsOutputParser:
                 ),
                 'category': 'subdomain_enumeration',
                 'priority': 'medium',
-                'notes': 'Additional Sublist3r results grouped to keep the canvas usable.'
+                'notes': f'Additional {tool_label} results grouped to keep the canvas usable.'
             }
             note_position = QPointF(main_domain_position.x() + 230, main_domain_position.y() + len(visible_subdomains) * 120)
             overflow_node = self.graph_manager.add_node('note', note_position, hidden_note_data)
@@ -622,7 +645,7 @@ class ToolsOutputParser:
         parts = [part.strip().lower() for part in re.split(r"[,\n;]+", text) if part.strip()]
         return parts
 
-    def _extract_sublist3r_subdomains(self, output, target):
+    def _extract_subfinder_subdomains(self, output, target):
         if not output or not target:
             return []
 
@@ -652,6 +675,9 @@ class ToolsOutputParser:
 
         subdomains.sort(key=self._subdomain_sort_key)
         return subdomains
+
+    def parse_sublist3r_output(self, output, target=None):
+        return self.parse_subfinder_output(output, target)
 
     def _subdomain_sort_key(self, subdomain):
         labels = subdomain.split(".")
@@ -824,6 +850,187 @@ class ToolsOutputParser:
             self.graph_manager.connect_nodes(web_app_node.id, overflow_node.id, "gobuster_overflow")
         
         return nodes_created
+
+    def parse_whatweb_output(self, output, target=None):
+        nodes_created = []
+        entries = self._parse_whatweb_entries(output)
+        if not entries:
+            return nodes_created
+
+        primary_entry = self._select_primary_whatweb_entry(entries)
+        if not primary_entry:
+            return nodes_created
+        redirect_entry = self._find_whatweb_redirect_entry(entries)
+
+        web_app_position = QPointF(0, 0)
+        web_app_data = {
+            "url": primary_entry["url"],
+            "title": primary_entry["title"],
+            "http_status": primary_entry["status_text"],
+            "web_server": primary_entry["web_server"],
+            "redirect_location": redirect_entry["redirect_location"] if redirect_entry else "",
+            "ip_address": primary_entry["ip_address"],
+            "technology_stack": primary_entry["technologies"],
+            "fingerprint": primary_entry["raw_line"],
+            "authentication_method": "",
+            "endpoints": "",
+            "vulnerabilities_found": 0,
+            "risk_level": "unknown",
+            "notes": "WhatWeb technology fingerprinting",
+        }
+        web_app_node = self.graph_manager.add_node("web_application", web_app_position, web_app_data)
+        nodes_created.append(web_app_node)
+
+        if primary_entry["ip_address"]:
+            ip_node = self.graph_manager.add_node(
+                "ip",
+                QPointF(220, 0),
+                {
+                    "address": primary_entry["ip_address"],
+                    "geo_location": primary_entry["country"],
+                    "threat_level": "unknown",
+                    "os": "",
+                    "services": primary_entry["web_server"],
+                    "ports": "",
+                    "notes": f"Observed via WhatWeb for {primary_entry['url']}",
+                },
+            )
+            nodes_created.append(ip_node)
+            self.graph_manager.connect_nodes(web_app_node.id, ip_node.id, "resolves_to_ip")
+
+        if redirect_entry and redirect_entry["redirect_location"]:
+            redirect_host = self._extract_host_from_url(redirect_entry["redirect_location"])
+            redirect_name = redirect_host or redirect_entry["redirect_location"]
+            redirect_node = self.graph_manager.add_node(
+                "domain",
+                QPointF(-220, 0),
+                {
+                    "name": redirect_name,
+                    "register": "",
+                    "creation_date": "",
+                    "name_servers": "",
+                    "subnames": "",
+                    "notes": f"Redirect target discovered by WhatWeb: {redirect_entry['redirect_location']}",
+                },
+            )
+            nodes_created.append(redirect_node)
+            self.graph_manager.connect_nodes(web_app_node.id, redirect_node.id, "redirects_to")
+
+        if primary_entry["details"]:
+            note_node = self.graph_manager.add_node(
+                "note",
+                QPointF(220, 120),
+                {
+                    "title": "WhatWeb Details",
+                    "content": (
+                        f"Target: {primary_entry['url']}\n"
+                        f"HTTP: {primary_entry['status_text']}\n"
+                        f"Technologies: {primary_entry['technologies'] or 'n/a'}\n\n"
+                        f"{primary_entry['details']}"
+                    ).strip(),
+                    "category": "web_enumeration",
+                    "priority": "medium",
+                    "notes": "Extended WhatWeb fingerprint details.",
+                },
+            )
+            nodes_created.append(note_node)
+            self.graph_manager.connect_nodes(web_app_node.id, note_node.id, "fingerprint_details")
+
+        return nodes_created
+
+    def _parse_whatweb_entries(self, output):
+        entries = []
+        for raw_line in (output or "").splitlines():
+            line = raw_line.strip()
+            if not line or not re.match(r"^https?://", line, re.IGNORECASE):
+                continue
+
+            match = re.match(r"^(https?://\S+)\s+\[(.*?)\](?:\s+(.*))?$", line)
+            if not match:
+                continue
+
+            url, status_text, raw_fields = match.groups()
+            field_values = {}
+            bare_values = []
+            for token in self._split_whatweb_fields(raw_fields or ""):
+                field_match = re.match(r"^([A-Za-z0-9_.-]+)\[(.*)\]$", token)
+                if field_match:
+                    field_values[field_match.group(1).strip()] = field_match.group(2).strip()
+                elif token:
+                    bare_values.append(token.strip())
+
+            technology_parts = []
+            for key, value in field_values.items():
+                if key in {"Country", "IP", "Title", "RedirectLocation", "HTTPServer"}:
+                    continue
+                technology_parts.append(f"{key}[{value}]" if value else key)
+            technology_parts.extend(value for value in bare_values if value and value not in technology_parts)
+
+            details = []
+            for key in ("Country", "Email", "MetaGenerator", "PoweredBy", "X-Powered-By", "Strict-Transport-Security"):
+                value = field_values.get(key, "")
+                if value:
+                    details.append(f"{key}: {value}")
+
+            entries.append(
+                {
+                    "url": url,
+                    "status_code": self._extract_whatweb_status_code(status_text),
+                    "status_text": status_text,
+                    "title": field_values.get("Title", ""),
+                    "web_server": field_values.get("HTTPServer", "") or next((value for value in bare_values if value), ""),
+                    "ip_address": field_values.get("IP", ""),
+                    "redirect_location": field_values.get("RedirectLocation", ""),
+                    "country": field_values.get("Country", ""),
+                    "technologies": ", ".join(technology_parts),
+                    "details": "\n".join(details),
+                    "raw_line": line,
+                }
+            )
+        return entries
+
+    def _split_whatweb_fields(self, raw_fields):
+        tokens = []
+        current = []
+        depth = 0
+        for char in str(raw_fields or ""):
+            if char == "[":
+                depth += 1
+            elif char == "]" and depth > 0:
+                depth -= 1
+            if char == "," and depth == 0:
+                token = "".join(current).strip()
+                if token:
+                    tokens.append(token)
+                current = []
+                continue
+            current.append(char)
+        tail = "".join(current).strip()
+        if tail:
+            tokens.append(tail)
+        return tokens
+
+    def _select_primary_whatweb_entry(self, entries):
+        if not entries:
+            return None
+        for entry in reversed(entries):
+            if str(entry.get("status_code", "")).startswith("2"):
+                return entry
+        return entries[-1]
+
+    def _find_whatweb_redirect_entry(self, entries):
+        for entry in entries:
+            if entry.get("redirect_location") and str(entry.get("status_code", "")).startswith("3"):
+                return entry
+        return None
+
+    def _extract_host_from_url(self, value):
+        match = re.match(r"^https?://([^/:?#]+)", str(value or "").strip(), re.IGNORECASE)
+        return match.group(1).strip() if match else ""
+
+    def _extract_whatweb_status_code(self, status_text):
+        match = re.match(r"^(\d{3})", str(status_text or "").strip())
+        return match.group(1) if match else str(status_text or "").strip()
 
     def parse_tshark_output(self, output, target=None):
         nodes_created = []

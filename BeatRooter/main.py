@@ -161,6 +161,8 @@ def main():
             main_window.statusBar().showMessage(f"Opened investigation: {file_path}")
             settings.setValue('last_saved_project', file_path)
             settings.setValue('last_project', file_path)
+            if hasattr(main_window, "emit_ndc_project_opened"):
+                main_window.emit_ndc_project_opened(file_path, reason="startup_previous_project")
         except Exception as exc:
             QMessageBox.critical(None, "Open Failed", f"Failed to open project: {exc}")
             main_window.close()

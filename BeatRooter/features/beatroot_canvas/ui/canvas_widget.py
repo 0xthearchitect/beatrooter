@@ -114,10 +114,7 @@ class CanvasWidget(QGraphicsView):
         self.scene.setSceneRect(bounds.adjusted(-padding, -padding, padding, padding))
     
     def drawBackground(self, painter, rect):
-        background_gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        background_gradient.setColorAt(0.0, QColor(12, 19, 31))
-        background_gradient.setColorAt(1.0, QColor(11, 18, 29))
-        painter.fillRect(rect, background_gradient)
+        painter.fillRect(rect, QColor("#0f0f0f"))
 
         if self.background_style == "dots":
             self._draw_dotted_background(painter, rect)
@@ -127,8 +124,8 @@ class CanvasWidget(QGraphicsView):
             right = int(rect.right())
             bottom = int(rect.bottom())
 
-            minor_pen = QPen(QColor(40, 60, 88, 58), 1)
-            major_pen = QPen(QColor(72, 102, 144, 86), 1)
+            minor_pen = QPen(QColor(235, 235, 235, 34), 1)
+            major_pen = QPen(QColor(245, 245, 245, 52), 1)
 
             for x in range(left, right, self.grid_size):
                 is_major_x = (x // self.grid_size) % 5 == 0
@@ -148,7 +145,7 @@ class CanvasWidget(QGraphicsView):
         right = int(rect.right())
         bottom = int(rect.bottom())
 
-        dot_brush = QBrush(QColor(112, 138, 172, 95))
+        dot_brush = QBrush(QColor(244, 244, 244, 90))
         painter.setPen(Qt.PenStyle.NoPen)
 
         for x in range(left, right + dot_spacing, dot_spacing):

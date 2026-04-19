@@ -8,6 +8,7 @@ import sys
 import subprocess
 from pathlib import Path
 import shutil
+import re
 from PyQt6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
                              QProgressBar, QPushButton, QTextEdit, QCheckBox,
                              QMessageBox, QApplication, QGroupBox, QScrollArea,
@@ -38,6 +39,7 @@ class InstallationThread(QThread):
         aliases = {
             "nslookup": "dnsutils",
             "searchexploit": "searchsploit",
+            "sublist3r": "subfinder",
         }
         return aliases.get(str(tool_name or "").strip().lower(), str(tool_name or "").strip().lower())
 
@@ -59,6 +61,8 @@ class InstallationThread(QThread):
             return self.installer_config["searchexploit"]
         if normalized == "dnsutils" and "nslookup" in self.installer_config:
             return self.installer_config["nslookup"]
+        if normalized == "subfinder" and "sublist3r" in self.installer_config:
+            return self.installer_config["sublist3r"]
         return None
 
     def _resolve_install_method(self, tool_name):
@@ -161,7 +165,7 @@ class InstallationThread(QThread):
         return False
 
     def install_windows_native(self, tool_name):
-        if tool_name in {'sublist3r', 'whois'}:
+        if tool_name == 'whois':
             return self.install_via_pip(tool_name)
 
         if self._try_windows_package_manager_install(tool_name):
@@ -170,6 +174,7 @@ class InstallationThread(QThread):
         manual_tools = {
             'nmap': "Baixe do site: https://nmap.org/download.html",
             'exiftool': "Baixe do site: https://exiftool.org/",
+            'amass': "Projeto oficial: https://github.com/owasp-amass/amass",
             'gobuster': "Baixe do GitHub: https://github.com/OJ/gobuster/releases",
             'masscan': "Baixe do GitHub: https://github.com/robertdavidgraham/masscan/releases",
             'dnsutils': "Instale BIND Tools para Windows, ou use PowerShell Resolve-DnsName.",
@@ -204,13 +209,10 @@ class InstallationThread(QThread):
         return False
 
     def install_linux_native(self, tool_name):
-        if tool_name == 'sublist3r':
-            return self.install_via_pip(tool_name)
-
         package_manager = self._detect_linux_package_manager()
         if not package_manager:
             self.log_message.emit("Nenhum gestor de pacotes Linux suportado foi encontrado (apt/dnf/pacman/zypper/apk).")
-            if tool_name in {'sublist3r', 'whois'}:
+            if tool_name in {'whois'}:
                 return self.install_via_pip(tool_name)
             return False
 
@@ -223,7 +225,7 @@ class InstallationThread(QThread):
         if not package_name:
             self.log_message.emit(f"{tool_name} não tem mapeamento oficial para {package_manager}.")
             self._log_linux_install_hint(tool_name, package_manager)
-            if tool_name in {'sublist3r', 'whois'}:
+            if tool_name in {'whois'}:
                 return self.install_via_pip(tool_name)
             return False
 
@@ -308,20 +310,19 @@ class InstallationThread(QThread):
         return False
 
     def install_macos_native(self, tool_name):
-        if tool_name == 'sublist3r':
-            return self.install_via_pip(tool_name)
-
         if not self._command_exists('brew'):
             self.log_message.emit("Homebrew não está instalado. Instale em https://brew.sh")
-            if tool_name in {'whois', 'sublist3r'}:
+            if tool_name in {'whois'}:
                 return self.install_via_pip(tool_name)
             return False
 
         brew_packages = {
             'nmap': 'nmap',
             'exiftool': 'exiftool',
+            'amass': 'amass',
             'gobuster': 'gobuster',
             'masscan': 'masscan',
+            'subfinder': 'subfinder',
             'whois': 'whois',
             'dnsutils': 'bind',
             'binwalk': 'binwalk',
@@ -346,9 +347,10 @@ class InstallationThread(QThread):
 
     def verify_system_installation(self, tool_name):
         aliases = {
+            'amass': ['amass'],
             'dnsutils': ['nslookup', 'dig', 'host'],
             'exiftool': ['exiftool', 'exif'],
-            'sublist3r': ['sublist3r'],
+            'subfinder': ['subfinder'],
             'whois': ['whois'],
             'netcat': ['nc', 'netcat', 'ncat'],
             'tshark': ['tshark'],
@@ -372,8 +374,8 @@ class InstallationThread(QThread):
             self.log_message.emit("WSL não está disponível ou não responde.")
             return False
 
-        if tool_name == 'sublist3r':
-            return self._install_wsl_pip_package('sublist3r')
+        if tool_name == 'subfinder':
+            return self._install_wsl_native_tool('subfinder')
         if tool_name == 'whois':
             if self._install_wsl_native_tool('whois'):
                 return True
@@ -383,15 +385,12 @@ class InstallationThread(QThread):
 
     def verify_wsl_installation(self, tool_name):
         try:
-            if tool_name == 'sublist3r':
-                cmd = ['wsl', 'bash', '-lc', 'python3 -m sublist3r --help']
+            if tool_name == 'dnsutils':
+                cmd = ['wsl', 'bash', '-lc', 'command -v nslookup || command -v dig']
+            elif tool_name == 'netcat':
+                cmd = ['wsl', 'bash', '-lc', 'command -v nc || command -v netcat || command -v ncat']
             else:
-                if tool_name == 'dnsutils':
-                    cmd = ['wsl', 'bash', '-lc', 'command -v nslookup || command -v dig']
-                elif tool_name == 'netcat':
-                    cmd = ['wsl', 'bash', '-lc', 'command -v nc || command -v netcat || command -v ncat']
-                else:
-                    cmd = ['wsl', 'bash', '-lc', f'command -v {tool_name}']
+                cmd = ['wsl', 'bash', '-lc', f'command -v {tool_name}']
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             return result.returncode == 0
@@ -401,7 +400,6 @@ class InstallationThread(QThread):
 
     def install_via_pip(self, tool_name):
         pip_packages = {
-            'sublist3r': 'sublist3r',
             'whois': 'python-whois'
         }
         
@@ -459,9 +457,11 @@ class InstallationThread(QThread):
             return False
 
         aur_packages = {
+            'amass': 'amass',
             'steghide': 'steghide',
             'enum4linux': 'enum4linux-git',
             'patator': 'patator',
+            'subfinder': 'subfinder',
             'whatweb': 'whatweb',
         }
         package_name = aur_packages.get(tool_name)
@@ -541,6 +541,43 @@ class InstallationThread(QThread):
         path_parts = os.environ.get('PATH', '').split(os.pathsep)
         if str(local_bin) not in path_parts:
             self.log_message.emit(f"Sugestão: adicione {local_bin} ao PATH se ainda não estiver disponível nesta sessão.")
+
+    def _ensure_whatweb_ruby_compatibility(self, target_dir):
+        gemfile_path = Path(target_dir) / 'Gemfile'
+        if not gemfile_path.exists():
+            self.log_message.emit("Gemfile do WhatWeb não encontrado após o clone.")
+            return False
+
+        try:
+            gemfile_text = gemfile_path.read_text(encoding='utf-8')
+            missing_gems = [
+                gem_name for gem_name in ('getoptlong', 'resolv-replace')
+                if not re.search(rf"^\s*gem\s+['\"]{re.escape(gem_name)}['\"]", gemfile_text, flags=re.MULTILINE)
+            ]
+            if not missing_gems:
+                return True
+
+            compatibility_note = "\n# Ruby 3.4+ moved these libraries out of the default gems.\n"
+            compatibility_note += "".join(f"gem '{gem_name}'\n" for gem_name in missing_gems)
+            gemfile_path.write_text(gemfile_text.rstrip() + compatibility_note, encoding='utf-8')
+            self.log_message.emit(
+                "Compatibilidade WhatWeb/Ruby 3.4: adicionadas gems "
+                + ", ".join(f"`{gem_name}`" for gem_name in missing_gems)
+                + " ao Gemfile local."
+            )
+            return True
+        except Exception as exc:
+            self.log_message.emit(f"Erro ao ajustar Gemfile do WhatWeb: {exc}")
+            return False
+
+    @staticmethod
+    def _build_whatweb_wrapper_script():
+        return (
+            '#!/bin/sh\n'
+            'set -e\n'
+            'cd "$HOME/opt/WhatWeb"\n'
+            'exec bundle exec ruby "$HOME/opt/WhatWeb/whatweb" "$@"\n'
+        )
 
     def _install_local_cupp(self, local_bin, local_opt):
         target_dir = local_opt / 'cupp'
@@ -646,15 +683,43 @@ class InstallationThread(QThread):
         return True
 
     def _install_local_revshellgen(self, local_bin, local_opt):
+        if not self._command_exists('python3'):
+            self.log_message.emit("RevShellGen local requer `python3` instalado no sistema.")
+            self._mark_manual_required("Instale `python3`, depois use a instalação local do RevShellGen.")
+            return False
+
         target_dir = local_opt / 'revshellgen'
+        venv_dir = local_opt / 'revshellgen-venv'
         if target_dir.exists():
             shutil.rmtree(target_dir)
+        if venv_dir.exists():
+            shutil.rmtree(venv_dir)
         if not self._run_local_install_command(['git', 'clone', 'https://github.com/t0thkr1s/revshellgen.git', str(target_dir)], timeout=900):
             self._mark_manual_required("Clone manual: git clone https://github.com/t0thkr1s/revshellgen.git ~/opt/revshellgen")
             return False
 
+        if not self._run_local_install_command(['python3', '-m', 'venv', str(venv_dir)], timeout=900):
+            self._mark_manual_required("Crie um venv manualmente: python3 -m venv ~/opt/revshellgen-venv")
+            return False
+
+        pip_path = venv_dir / 'bin' / 'pip'
+        python_path = venv_dir / 'bin' / 'python'
+        if not pip_path.exists() or not python_path.exists():
+            self.log_message.emit("Não foi possível preparar o ambiente virtual do RevShellGen.")
+            return False
+
+        self._run_local_install_command([str(pip_path), 'install', '--upgrade', 'pip', 'setuptools', 'wheel'], timeout=1200)
+        if not self._run_local_install_command([str(pip_path), 'install', '-r', 'requirements-minimal.txt'], cwd=target_dir, timeout=1200):
+            self._mark_manual_required(
+                "No diretório ~/opt/revshellgen use o venv e execute: pip install -r requirements-minimal.txt"
+            )
+            return False
+
         wrapper = local_bin / 'revshellgen'
-        if not self._write_user_wrapper(wrapper, '#!/bin/sh\nexec python3 "$HOME/opt/revshellgen/revshellgen.py" "$@"\n'):
+        if not self._write_user_wrapper(
+            wrapper,
+            '#!/bin/sh\nexec "$HOME/opt/revshellgen-venv/bin/python" "$HOME/opt/revshellgen/revshellgen.py" "$@"\n',
+        ):
             return False
         self._mark_local_path_hint()
         return True
@@ -672,6 +737,13 @@ class InstallationThread(QThread):
             self._mark_manual_required("Clone manual: git clone https://github.com/urbanadventurer/WhatWeb.git ~/opt/WhatWeb")
             return False
 
+        if not self._ensure_whatweb_ruby_compatibility(target_dir):
+            self._mark_manual_required(
+                "No diretório do WhatWeb adicione `gem 'getoptlong'` e `gem 'resolv-replace'` ao Gemfile "
+                "e execute `bundle install`."
+            )
+            return False
+
         if not self._run_local_install_command(['bundle', 'config', 'set', 'path', 'vendor/bundle'], cwd=target_dir, timeout=1200):
             self._mark_manual_required("No diretório do WhatWeb execute: bundle config set path vendor/bundle")
             return False
@@ -681,14 +753,13 @@ class InstallationThread(QThread):
             return False
 
         wrapper = local_bin / 'whatweb'
-        if not self._write_user_wrapper(wrapper, '#!/bin/sh\nexec ruby "$HOME/opt/WhatWeb/whatweb" "$@"\n'):
+        if not self._write_user_wrapper(wrapper, self._build_whatweb_wrapper_script()):
             return False
         self._mark_local_path_hint()
         return True
 
     def verify_pip_installation(self, tool_name):
         verification_commands = {
-            'sublist3r': [sys.executable, '-c', 'import sublist3r; print("OK")'],
             'whois': [sys.executable, '-c', 'import whois; print("OK")']
         }
         
@@ -759,6 +830,8 @@ class InstallationThread(QThread):
             },
             'gobuster': {'apt-get': 'gobuster', 'apt': 'gobuster', 'dnf': 'gobuster', 'yum': 'gobuster', 'pacman': 'gobuster', 'zypper': 'gobuster', 'apk': 'gobuster'},
             'masscan': {'apt-get': 'masscan', 'apt': 'masscan', 'dnf': 'masscan', 'yum': 'masscan', 'pacman': 'masscan', 'zypper': 'masscan', 'apk': 'masscan'},
+            'amass': {'apt-get': 'amass', 'apt': 'amass', 'dnf': 'amass', 'yum': 'amass', 'zypper': 'amass', 'apk': 'amass'},
+            'subfinder': {'apt-get': 'subfinder', 'apt': 'subfinder', 'dnf': 'subfinder', 'yum': 'subfinder', 'zypper': 'subfinder', 'apk': 'subfinder'},
             'whois': {'apt-get': 'whois', 'apt': 'whois', 'dnf': 'whois', 'yum': 'whois', 'pacman': 'whois', 'zypper': 'whois', 'apk': 'whois'},
             'dnsutils': {'apt-get': 'dnsutils', 'apt': 'dnsutils', 'dnf': 'bind-utils', 'yum': 'bind-utils', 'pacman': 'bind', 'zypper': 'bind-utils', 'apk': 'bind-tools'},
             'binwalk': {'apt-get': 'binwalk', 'apt': 'binwalk', 'dnf': 'binwalk', 'yum': 'binwalk', 'pacman': 'binwalk', 'zypper': 'binwalk', 'apk': 'binwalk'},
@@ -793,12 +866,14 @@ class InstallationThread(QThread):
             return None
 
         pacman_hints = {
+            'amass': "No Arch, use AUR (`amass`) ou instale manualmente a partir do projeto OWASP Amass.",
             'cupp': "No Arch, use instalação manual do projeto ou AUR equivalente (`cupp-v3`).",
             'enum4linux': "No Arch, use AUR (`enum4linux-git`) ou clone manual do projeto.",
             'linpeas': "No Arch, use instalação manual a partir do projeto PEASS-ng.",
             'patator': "No Arch, use AUR (`patator`) ou clone manual do projeto.",
             'revshellgen': "No Arch, use clone manual do projeto oficial.",
             'steghide': "No Arch, `steghide` não costuma estar no repositório oficial; prefira AUR ou instalação manual.",
+            'subfinder': "No Arch, use AUR (`subfinder`) ou instale manualmente a partir do projeto ProjectDiscovery.",
             'whatweb': "No Arch, use AUR (`whatweb`) ou instalação manual com Ruby/bundle.",
         }
         if tool_name in pacman_hints:
@@ -1244,13 +1319,13 @@ class InstallationDialog(QDialog):
         system = platform.system().lower()
         
         if system == "linux":
-            if tool_name in ['steghide', 'enum4linux'] and self._command_exists('yay'):
+            if tool_name in ['amass', 'steghide', 'enum4linux', 'subfinder'] and self._command_exists('yay'):
                 return {'name': 'Via AUR (yay)', 'value': 'aur'}
             if tool_name in ['cupp', 'linpeas', 'patator', 'revshellgen', 'whatweb']:
                 return {'name': 'Instalação Local', 'value': 'local'}
             return {'name': 'Instalação Nativa', 'value': 'native'}
         elif system == "windows":
-            if tool_name in ['sublist3r', 'whois']:
+            if tool_name in ['whois']:
                 return {'name': 'Via PIP (Python)', 'value': 'python'}
             if self.is_wsl_available():
                 return {'name': 'Via WSL (Linux)', 'value': 'wsl'}
@@ -1261,11 +1336,11 @@ class InstallationDialog(QDialog):
 
     def is_method_supported(self, tool_name, method):
         if method == 'aur':
-            return tool_name in ['steghide', 'enum4linux', 'patator', 'whatweb']
+            return tool_name in ['amass', 'steghide', 'enum4linux', 'patator', 'subfinder', 'whatweb']
         if method == 'local':
             return tool_name in ['cupp', 'linpeas', 'patator', 'revshellgen', 'whatweb']
         if method == 'python':
-            return tool_name in ['sublist3r', 'whois']
+            return tool_name in ['whois']
         return True
 
     def is_wsl_available(self):
@@ -1374,12 +1449,14 @@ class ToolsDownloadManager:
     TOOL_KEY_ALIASES = {
         'nslookup': 'dnsutils',
         'searchexploit': 'searchsploit',
+        'sublist3r': 'subfinder',
     }
 
     TOOL_ALIASES = {
         'dnsutils': ['nslookup', 'dig', 'host'],
         'nslookup': ['nslookup', 'dig', 'host'],
-        'sublist3r': ['sublist3r'],
+        'subfinder': ['subfinder'],
+        'amass': ['amass'],
         'whois': ['whois'],
         'nmap': ['nmap'],
         'exiftool': ['exiftool', 'exif'],
@@ -1440,14 +1517,6 @@ class ToolsDownloadManager:
             if shutil.which(alias):
                 return True
         
-        # Verifica módulos Python
-        if tool_name == 'sublist3r':
-            try:
-                import sublist3r
-                return True
-            except ImportError:
-                pass
-        
         if tool_name == 'whois':
             try:
                 import whois
@@ -1465,11 +1534,8 @@ class ToolsDownloadManager:
     def check_tool_in_wsl(self, tool_name):
         try:
             tool_name = self.normalize_tool_name(tool_name)
-            if tool_name == 'sublist3r':
-                cmd = ['wsl', 'bash', '-lc', 'python3 -c "import sublist3r; print(\'available\')"']
-            else:
-                alias_checks = " || ".join([f"command -v {alias}" for alias in self.tool_aliases(tool_name)])
-                cmd = ['wsl', 'bash', '-lc', alias_checks]
+            alias_checks = " || ".join([f"command -v {alias}" for alias in self.tool_aliases(tool_name)])
+            cmd = ['wsl', 'bash', '-lc', alias_checks]
             
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             return result.returncode == 0
@@ -1496,12 +1562,6 @@ class ToolsDownloadManager:
                 candidate_path = shutil.which(candidate)
                 if candidate_path:
                     return candidate_path
-
-        if tool_name == 'sublist3r':
-            if self.check_python_module('sublist3r'):
-                return f'{sys.executable} -m sublist3r'
-            path = shutil.which('sublist3r')
-            return path if path else None
 
         if tool_name == 'whois':
             if self.check_python_module('whois'):
@@ -1532,10 +1592,7 @@ class ToolsDownloadManager:
 
     def check_python_module(self, module_name):
         try:
-            if module_name == 'sublist3r':
-                import sublist3r
-                return True
-            elif module_name == 'whois':
+            if module_name == 'whois':
                 import whois
                 return True
         except ImportError:

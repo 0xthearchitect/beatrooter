@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import getpass
+import tempfile
 from datetime import datetime
 from PyQt6.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, QWidget, 
                              QToolBar, QStatusBar, QFileDialog, QMessageBox,
@@ -24,6 +25,9 @@ from features.beatroot_canvas.core import GraphManager, StorageManager, ThemeMan
 from features.beatroot_canvas.core.flipper_workspace_importer import FlipperWorkspaceImporter
 from features.beatroot_canvas.core.flipper_device_manager import FlipperDeviceManager
 from features.beatroot_canvas.core.flipper_serial_storage import FlipperSerialStorageMirror, FlipperSerialBusyError, FlipperSerialError
+from features.ndc.core.integration import ensure_default_ndc_scheduler, get_default_ndc_runtime
+from features.ndc.core.graph_capture import build_snapshot_payload, compute_graph_fingerprint, diff_graph_state
+from features.ndc.core.tool_capture import build_artifact_refs, build_tool_payload, compact_tool_summary
 
 from features.beatroot_canvas.ui.canvas_widget import CanvasWidget
 from features.beatroot_canvas.ui.flipper_explorer_dialog import FlipperExplorerDialog
@@ -40,15 +44,31 @@ from utils.image_utils import ImageUtils
 #from ai.ai_assistant import AIAssistant
 from utils.path_utils import get_resource_path
 from features.tools.core.tool_node_service import ToolNodeService
+from features.wordlists.core.wordlist_service import WordlistService, WordlistValidationError
 
 
 class DigitalDetectiveBoard(QMainWindow):
     STACKER_Z_BASE = -200.0
+    STACKER_EDGE_Z = -240.0
+    STACKER_MIN_WIDTH = 124.0
+    STACKER_MIN_HEIGHT = 108.0
+    STACKER_COLLAPSED_WIDTH = 118.0
+    STACKER_COLLAPSED_HEIGHT = 54.0
+    STACKER_SIDE_PADDING = 24.0
+    STACKER_TOP_PADDING = 42.0
+    STACKER_BOTTOM_PADDING = 22.0
+    STACKER_LINK_HOLD_MS = 700
 
     def __init__(self, project_type=None, category=None, template_data=None):
         super().__init__()
         self.graph_manager = GraphManager()
         self.storage_manager = StorageManager()
+        self.ndc_runtime = get_default_ndc_runtime()
+        self.ndc_scheduler = ensure_default_ndc_scheduler()
+        self.ndc_snapshot_timer = QTimer(self)
+        self.ndc_snapshot_timer.setInterval(60000)
+        self.ndc_snapshot_timer.timeout.connect(self._emit_scheduled_snapshot_checkpoint)
+        self._last_ndc_snapshot_id = None
         self.current_theme = 'cyber_modern'
         self.node_widgets = {}
         self.edge_items = {}
@@ -59,7 +79,13 @@ class DigitalDetectiveBoard(QMainWindow):
         self.pending_stacker_preview_item = None
         self._active_stacker_drag_contexts = {}
         self._active_node_move_snapshot = None
+        self._active_stacker_move_snapshot = None
         self._applying_stacker_cascade = False
+        self._drag_link_state = None
+        self._drag_link_hold_timer = QTimer(self)
+        self._drag_link_hold_timer.setSingleShot(True)
+        self._drag_link_hold_timer.setInterval(self.STACKER_LINK_HOLD_MS)
+        self._drag_link_hold_timer.timeout.connect(self._arm_pending_drag_link_action)
         self._syncing_stacker_selection = False
         self.flipper_explorer_dialog = None
         self.flipper_rpc_mirror_root = None
@@ -94,6 +120,7 @@ class DigitalDetectiveBoard(QMainWindow):
         self.apply_theme(self.current_theme)
         self.setup_connections()
         self._install_save_state_hook()
+        self.ndc_snapshot_timer.start()
 
         
         if category:
@@ -128,9 +155,12 @@ class DigitalDetectiveBoard(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setObjectName("MainSplitter")
         self.main_splitter = splitter
-        self._detail_panel_last_width = 300
+        self._detail_panel_last_width = 460
 
-        self.beatnote_service = BeatNoteService()
+        self.beatnote_service = BeatNoteService(
+            ndc_runtime=self.ndc_runtime,
+            ndc_context_provider=self._current_ndc_note_context,
+        )
         self.toolbox = ToolboxWidget(
             self.graph_manager,
             self.category,
@@ -170,8 +200,8 @@ class DigitalDetectiveBoard(QMainWindow):
         # Detail panel
         self.detail_panel = DetailPanel(self, beatnote_service=self.beatnote_service)
         self.detail_panel.setObjectName("DetailColumn")
-        self.detail_panel.setMinimumWidth(380)
-        self.detail_panel.setMaximumWidth(540)
+        self.detail_panel.setMinimumWidth(450)
+        self.detail_panel.setMaximumWidth(620)
         splitter.addWidget(self.detail_panel)
 
         self.tools_integration.setup_tools_integration(use_dock=False)
@@ -182,14 +212,13 @@ class DigitalDetectiveBoard(QMainWindow):
         self.stackers_panel.edit_selected_requested.connect(self.edit_selected_stacker)
         self.stackers_panel.delete_selected_requested.connect(self.delete_selected_stacker)
         self.stackers_panel.stacker_selected.connect(self._on_stacker_selected_from_panel)
-        self.stackers_panel.layer_action_requested.connect(self._on_stacker_layer_action_requested)
         self.detail_panel.attach_stackers_widget(self.stackers_panel)
         self.canvas_widget.scene.selectionChanged.connect(self._on_scene_selection_changed)
         
         splitter.setChildrenCollapsible(False)
         splitter.setStretchFactor(0, 1)
         splitter.setStretchFactor(1, 0)
-        splitter.setSizes([1140, 320])
+        splitter.setSizes([980, 460])
         main_layout.addWidget(splitter)
 
         self.create_menu_bar()
@@ -482,7 +511,12 @@ class DigitalDetectiveBoard(QMainWindow):
         original_save_state = self.graph_manager.save_state
 
         def hooked_save_state(description=""):
+            previous_graph = None
+            if 0 <= self.graph_manager.history_position < len(self.graph_manager.history):
+                previous_state = self.graph_manager.history[self.graph_manager.history_position]
+                previous_graph = copy.deepcopy(previous_state.get("graph_data"))
             original_save_state(description)
+            self._emit_ndc_graph_diff_events(previous_graph, self.graph_manager.graph_data)
             if not self._suspend_document_dirty_tracking:
                 self._mark_active_document_dirty()
             self.update_undo_redo_buttons()
@@ -490,8 +524,10 @@ class DigitalDetectiveBoard(QMainWindow):
         self.graph_manager.save_state = hooked_save_state
 
     def _create_initial_document_tab(self):
+        initial_graph = copy.deepcopy(self.graph_manager.graph_data)
+        self._ensure_ndc_project_id(initial_graph.metadata)
         self._append_document_tab(
-            graph_data=copy.deepcopy(self.graph_manager.graph_data),
+            graph_data=initial_graph,
             project_type=self.project_type,
             category=self.category,
             file_path=None,
@@ -509,6 +545,8 @@ class DigitalDetectiveBoard(QMainWindow):
         activate=True,
     ):
         payload = graph_data if graph_data is not None else self.graph_manager.graph_data
+        if hasattr(payload, "metadata") and isinstance(payload.metadata, dict):
+            self._ensure_ndc_project_id(payload.metadata)
         snapshot = copy.deepcopy(payload)
         try:
             node_counter = max(
@@ -552,6 +590,180 @@ class DigitalDetectiveBoard(QMainWindow):
             self._schedule_missing_tools_prompt_if_needed()
         return tab_index
 
+    def _ensure_ndc_project_id(self, metadata: dict | None) -> str:
+        return self.ndc_runtime.ensure_project_id(metadata, prefix="project")
+
+    def _current_ndc_note_context(self) -> dict[str, str]:
+        metadata = self.graph_manager.graph_data.metadata
+        project_id = self._ensure_ndc_project_id(metadata)
+        return {
+            "project_id": project_id,
+            "note_scope": "project",
+            "source_ref": "beatroot_canvas.beatnote_panel",
+            "format": "html",
+        }
+
+    def _build_ndc_project_payload(
+        self,
+        *,
+        graph_data=None,
+        file_path: str | None = None,
+        reason: str | None = None,
+        extra_payload: dict | None = None,
+    ) -> dict:
+        target_graph = graph_data or self.graph_manager.graph_data
+        metadata = getattr(target_graph, "metadata", {})
+        self._ensure_ndc_project_id(metadata)
+        project_title = str(metadata.get("title") or self.get_project_title() or "Untitled Investigation")
+        payload = {"project_title": project_title}
+        if file_path:
+            payload["file_path"] = str(file_path)
+        if reason:
+            payload["reason"] = reason
+        if extra_payload:
+            payload.update(extra_payload)
+        return payload
+
+    def _emit_ndc_project_event(
+        self,
+        action: str,
+        *,
+        graph_data=None,
+        file_path: str | None = None,
+        reason: str | None = None,
+        extra_payload: dict | None = None,
+    ) -> None:
+        target_graph = graph_data or self.graph_manager.graph_data
+        metadata = getattr(target_graph, "metadata", {})
+        project_id = self._ensure_ndc_project_id(metadata)
+        payload = self._build_ndc_project_payload(
+            graph_data=target_graph,
+            file_path=file_path,
+            reason=reason,
+            extra_payload=extra_payload,
+        )
+        try:
+            self.ndc_runtime.enqueue_event(
+                family="project",
+                action=action,
+                project_id=project_id,
+                payload=payload,
+            )
+        except Exception:
+            return
+
+    def _emit_ndc_graph_diff_events(self, previous_graph, current_graph) -> None:
+        metadata = getattr(current_graph, "metadata", {})
+        project_id = self._ensure_ndc_project_id(metadata)
+        for change in diff_graph_state(previous_graph, current_graph):
+            try:
+                self.ndc_runtime.enqueue_event(
+                    family=change.family,
+                    action=change.action,
+                    project_id=project_id,
+                    payload=change.payload,
+                )
+            except Exception:
+                continue
+
+    def _emit_ndc_snapshot_event(
+        self,
+        action: str,
+        *,
+        graph_data=None,
+        trigger: str,
+        summary: str,
+    ) -> None:
+        target_graph = graph_data or self.graph_manager.graph_data
+        metadata = getattr(target_graph, "metadata", {})
+        project_id = self._ensure_ndc_project_id(metadata)
+        snapshot_payload = build_snapshot_payload(
+            target_graph,
+            trigger=trigger,
+            summary=summary,
+        )
+        snapshot_id = snapshot_payload["snapshot_id"]
+        try:
+            self.ndc_runtime.enqueue_event(
+                family="snapshot",
+                action=action,
+                project_id=project_id,
+                payload=snapshot_payload,
+            )
+            self._last_ndc_snapshot_id = snapshot_id
+        except Exception:
+            return
+
+    def _current_ndc_related_node_id(self) -> str | None:
+        node = self._selected_node_for_beatnote()
+        if node is None:
+            return None
+        node_id = str(getattr(node, "id", "") or "").strip()
+        return node_id or None
+
+    def _emit_ndc_tool_event(
+        self,
+        action: str,
+        *,
+        tool_name: str,
+        surface: str,
+        result_summary: str | None = None,
+        result_status: str | None = None,
+        result_count: int | None = None,
+        related_node_id: str | None = None,
+        target_ref: str | None = None,
+        command_ref: str | None = None,
+        artifact_refs: tuple[str, ...] | list[str] = (),
+        context_scope: str | None = None,
+    ) -> None:
+        metadata = self.graph_manager.graph_data.metadata
+        project_id = self._ensure_ndc_project_id(metadata)
+        node_id = str(related_node_id or self._current_ndc_related_node_id() or "").strip() or None
+        payload = build_tool_payload(
+            event_action=action,
+            tool_name=tool_name,
+            surface=surface,
+            result_summary=result_summary,
+            result_status=result_status,
+            result_count=result_count,
+            related_node_id=node_id,
+            target_ref=target_ref,
+            command_ref=command_ref,
+            artifact_refs=artifact_refs,
+            context_scope=context_scope or ("node" if node_id else "project"),
+        )
+        try:
+            self.ndc_runtime.enqueue_event(
+                family="tool",
+                action=action,
+                project_id=project_id,
+                payload=payload,
+            )
+        except Exception:
+            return
+
+    def _emit_scheduled_snapshot_checkpoint(self) -> None:
+        graph_data = self.graph_manager.graph_data
+        if len(graph_data.nodes) == 0 and len(graph_data.edges) == 0:
+            return
+        snapshot_id = compute_graph_fingerprint(graph_data)
+        if snapshot_id == self._last_ndc_snapshot_id:
+            return
+        self._emit_ndc_snapshot_event(
+            "checkpoint_scheduled",
+            graph_data=graph_data,
+            trigger="scheduled_interval",
+            summary="Scheduled graph checkpoint for reconstruction fidelity.",
+        )
+
+    def emit_ndc_project_opened(self, file_path: str | None = None, *, reason: str = "open") -> None:
+        self._emit_ndc_project_event(
+            "opened",
+            graph_data=self.graph_manager.graph_data,
+            file_path=file_path or self.storage_manager.current_file,
+            reason=reason,
+        )
+
     def _estimate_document_size_bytes(self, document: dict) -> int:
         file_path = str(document.get("file_path") or "").strip()
         if file_path and os.path.exists(file_path) and not bool(document.get("dirty")):
@@ -569,8 +781,11 @@ class DigitalDetectiveBoard(QMainWindow):
         if not graph_data:
             return 0
         try:
-            serialized = json.dumps(graph_data.to_dict(), ensure_ascii=False)
-            return len(serialized.encode("utf-8"))
+            estimate_filename = file_path or os.path.join(
+                tempfile.gettempdir(),
+                f"beatrooter_document_{document.get('id', 'untitled')}.brt",
+            )
+            return self.storage_manager.estimate_graph_size_bytes(graph_data, estimate_filename)
         except Exception:
             return 0
 
@@ -733,6 +948,18 @@ class DigitalDetectiveBoard(QMainWindow):
         settings = QSettings("BeatRooter", "BeatRooter")
         settings.setValue("last_project", target_file)
         self._update_document_tab_label(index)
+        self._emit_ndc_project_event(
+            "saved",
+            graph_data=document["graph_data"],
+            file_path=target_file,
+            reason="save_as" if force_save_as else "save",
+        )
+        self._emit_ndc_snapshot_event(
+            "checkpoint_saved",
+            graph_data=document["graph_data"],
+            trigger="save",
+            summary="Checkpoint captured on investigation save.",
+        )
         return True
 
     def _confirm_close_document(self, index: int) -> bool:
@@ -773,6 +1000,14 @@ class DigitalDetectiveBoard(QMainWindow):
                 self.document_tabs.setCurrentIndex(self.active_document_index)
             self.document_tabs.blockSignals(False)
             return
+
+        closing_document = self.documents[index]
+        self._emit_ndc_snapshot_event(
+            "checkpoint_closed",
+            graph_data=closing_document.get("graph_data"),
+            trigger="tab_close",
+            summary="Checkpoint captured before document tab close.",
+        )
 
         closing_active = index == self.active_document_index
         self.documents.pop(index)
@@ -824,6 +1059,13 @@ class DigitalDetectiveBoard(QMainWindow):
             metadata["stackers"] = []
         if not isinstance(metadata.get("stacker_counter"), int):
             metadata["stacker_counter"] = 0
+        normalized_stackers = []
+        for payload in metadata.get("stackers", []):
+            if not isinstance(payload, dict):
+                continue
+            self._normalize_stacker_payload(payload)
+            normalized_stackers.append(payload)
+        metadata["stackers"] = normalized_stackers
 
     def _reset_stackers_metadata(self):
         self.graph_manager.graph_data.metadata["stackers"] = []
@@ -844,8 +1086,875 @@ class DigitalDetectiveBoard(QMainWindow):
                 return payload
         return None
 
-    def _stacker_z_for_layer(self, layer: int) -> float:
-        return self.STACKER_Z_BASE + float(layer)
+    def _normalize_stacker_payload(self, payload: dict):
+        if not isinstance(payload, dict):
+            return
+
+        payload["color"] = "#292929"
+        payload["name"] = str(payload.get("name", "Stacker")).strip() or "Stacker"
+        payload["type"] = str(payload.get("type", "")).strip()
+        payload["parent_stacker_id"] = str(payload.get("parent_stacker_id", "")).strip()
+        payload["collapsed"] = bool(payload.get("collapsed", False))
+
+        try:
+            payload["width"] = max(self.STACKER_MIN_WIDTH, float(payload.get("width", self.STACKER_MIN_WIDTH)))
+        except (TypeError, ValueError):
+            payload["width"] = self.STACKER_MIN_WIDTH
+
+        try:
+            payload["height"] = max(self.STACKER_MIN_HEIGHT, float(payload.get("height", self.STACKER_MIN_HEIGHT)))
+        except (TypeError, ValueError):
+            payload["height"] = self.STACKER_MIN_HEIGHT
+
+        for key in ("x", "y"):
+            try:
+                payload[key] = float(payload.get(key, 0.0))
+            except (TypeError, ValueError):
+                payload[key] = 0.0
+
+    def _get_node_parent_stacker_id(self, node) -> str:
+        if node is None:
+            return ""
+        parent_id = str((node.data or {}).get("parent_stacker_id", "") or "").strip()
+        return parent_id
+
+    def _set_node_parent_stacker_id(self, node, stacker_id: str):
+        if node is None:
+            return
+        stacker_id = str(stacker_id or "").strip()
+        if stacker_id:
+            node.data["parent_stacker_id"] = stacker_id
+        else:
+            node.data.pop("parent_stacker_id", None)
+
+    def _get_stacker_parent_id(self, stacker_id: str) -> str:
+        payload = self._find_stacker_payload(stacker_id)
+        if not payload:
+            return ""
+        return str(payload.get("parent_stacker_id", "") or "").strip()
+
+    def _set_stacker_parent_id(self, stacker_id: str, parent_id: str):
+        payload = self._find_stacker_payload(stacker_id)
+        if not payload:
+            return
+        payload["parent_stacker_id"] = str(parent_id or "").strip()
+
+    def _is_stacker_collapsed(self, stacker_id: str) -> bool:
+        payload = self._find_stacker_payload(stacker_id)
+        if not payload:
+            return False
+        return bool(payload.get("collapsed", False))
+
+    def _set_stacker_collapsed(self, stacker_id: str, collapsed: bool):
+        payload = self._find_stacker_payload(stacker_id)
+        if not payload:
+            return
+        payload["collapsed"] = bool(collapsed)
+
+    def _all_stacker_ids(self):
+        self._ensure_stacker_metadata()
+        ids = []
+        for payload in self.graph_manager.graph_data.metadata.get("stackers", []):
+            stacker_id = str(payload.get("id", "") or "").strip()
+            if stacker_id:
+                ids.append(stacker_id)
+        return ids
+
+    def _direct_child_node_ids(self, stacker_id: str):
+        stacker_id = str(stacker_id or "").strip()
+        if not stacker_id:
+            return []
+        node_ids = []
+        for node in self.graph_manager.graph_data.nodes.values():
+            if self._get_node_parent_stacker_id(node) == stacker_id:
+                node_ids.append(node.id)
+        return node_ids
+
+    def _direct_child_stacker_ids(self, stacker_id: str):
+        stacker_id = str(stacker_id or "").strip()
+        if not stacker_id:
+            return []
+        child_ids = []
+        for payload in self.graph_manager.graph_data.metadata.get("stackers", []):
+            if str(payload.get("parent_stacker_id", "") or "").strip() == stacker_id:
+                child_id = str(payload.get("id", "") or "").strip()
+                if child_id:
+                    child_ids.append(child_id)
+        return child_ids
+
+    def _is_stacker_descendant(self, candidate_id: str, ancestor_id: str) -> bool:
+        candidate_id = str(candidate_id or "").strip()
+        ancestor_id = str(ancestor_id or "").strip()
+        if not candidate_id or not ancestor_id or candidate_id == ancestor_id:
+            return False
+
+        visited = set()
+        current = self._get_stacker_parent_id(candidate_id)
+        while current and current not in visited:
+            if current == ancestor_id:
+                return True
+            visited.add(current)
+            current = self._get_stacker_parent_id(current)
+        return False
+
+    def _repair_stacker_links(self):
+        self._ensure_stacker_metadata()
+        valid_ids = set(self._all_stacker_ids())
+
+        for payload in self.graph_manager.graph_data.metadata.get("stackers", []):
+            stacker_id = str(payload.get("id", "") or "").strip()
+            parent_id = str(payload.get("parent_stacker_id", "") or "").strip()
+            if not parent_id or parent_id not in valid_ids or parent_id == stacker_id:
+                payload["parent_stacker_id"] = ""
+
+        for payload in self.graph_manager.graph_data.metadata.get("stackers", []):
+            stacker_id = str(payload.get("id", "") or "").strip()
+            seen = {stacker_id}
+            current = str(payload.get("parent_stacker_id", "") or "").strip()
+            while current:
+                if current in seen:
+                    payload["parent_stacker_id"] = ""
+                    break
+                seen.add(current)
+                current = self._get_stacker_parent_id(current)
+
+        for node in self.graph_manager.graph_data.nodes.values():
+            parent_id = self._get_node_parent_stacker_id(node)
+            if parent_id and parent_id not in valid_ids:
+                self._set_node_parent_stacker_id(node, "")
+
+    def _stacker_depth(self, stacker_id: str, memo=None) -> int:
+        memo = memo if memo is not None else {}
+        if stacker_id in memo:
+            return memo[stacker_id]
+
+        child_ids = self._direct_child_stacker_ids(stacker_id)
+        if not child_ids:
+            memo[stacker_id] = 0
+            return 0
+
+        depth = 1 + max(self._stacker_depth(child_id, memo) for child_id in child_ids)
+        memo[stacker_id] = depth
+        return depth
+
+    def _stacker_ids_child_first(self):
+        memo = {}
+        return sorted(self._all_stacker_ids(), key=lambda stacker_id: self._stacker_depth(stacker_id, memo))
+
+    def _stacker_rect_from_payload(self, payload: dict) -> QRectF:
+        return QRectF(
+            float(payload.get("x", 0.0)),
+            float(payload.get("y", 0.0)),
+            max(self.STACKER_MIN_WIDTH, float(payload.get("width", self.STACKER_MIN_WIDTH))),
+            max(self.STACKER_MIN_HEIGHT, float(payload.get("height", self.STACKER_MIN_HEIGHT))),
+        )
+
+    def _scene_rect_for_node_id(self, node_id: str) -> QRectF:
+        node_widget = self.node_widgets.get(str(node_id or ""))
+        if node_widget and node_widget.scene():
+            return node_widget.sceneBoundingRect()
+
+        node = self.graph_manager.get_node(str(node_id or ""))
+        if node is None:
+            return QRectF()
+        return QRectF(node.position.x() - 31.0, node.position.y() - 31.0, 62.0, 62.0)
+
+    def _scene_rect_for_stacker_id(self, stacker_id: str) -> QRectF:
+        stacker_item = self.stacker_items.get(str(stacker_id or ""))
+        if stacker_item and stacker_item.scene():
+            return QRectF(
+                float(stacker_item.scenePos().x()),
+                float(stacker_item.scenePos().y()),
+                float(stacker_item.width),
+                float(stacker_item.height),
+            )
+
+        payload = self._find_stacker_payload(str(stacker_id or ""))
+        if not payload:
+            return QRectF()
+        return self._stacker_rect_from_payload(payload)
+
+    def _stacker_content_counts(self, stacker_id: str):
+        node_ids, stacker_ids = self._collect_stacker_descendants(stacker_id)
+        return len(node_ids), len(stacker_ids)
+
+    def _stacker_hidden_by_collapsed_ancestor(self, stacker_id: str) -> bool:
+        visited = set()
+        current = self._get_stacker_parent_id(stacker_id)
+        while current and current not in visited:
+            if self._is_stacker_collapsed(current):
+                return True
+            visited.add(current)
+            current = self._get_stacker_parent_id(current)
+        return False
+
+    def _node_hidden_by_collapsed_ancestor(self, node) -> bool:
+        if node is None:
+            return False
+        visited = set()
+        current = self._get_node_parent_stacker_id(node)
+        while current and current not in visited:
+            if self._is_stacker_collapsed(current):
+                return True
+            visited.add(current)
+            current = self._get_stacker_parent_id(current)
+        return False
+
+    def _sync_edge_visibility(self):
+        for edge_id, edge_item in self.edge_items.items():
+            edge = self.graph_manager.get_edge(edge_id)
+            if edge is None:
+                continue
+            source_widget = self._resolve_connection_widget(edge.source_id)
+            target_widget = self._resolve_connection_widget(edge.target_id)
+            if source_widget and target_widget:
+                edge_item.update_path()
+            visible = bool(
+                source_widget
+                and target_widget
+                and source_widget.isVisible()
+                and target_widget.isVisible()
+            )
+            if hasattr(edge_item, "set_content_visible"):
+                edge_item.set_content_visible(visible)
+            else:
+                edge_item.setVisible(visible)
+
+    def _edge_is_stacker_related(self, edge) -> bool:
+        if edge is None:
+            return False
+        source_id = str(getattr(edge, "source_id", "") or "").strip()
+        target_id = str(getattr(edge, "target_id", "") or "").strip()
+        return source_id in self.stacker_items or target_id in self.stacker_items
+
+    def _edge_z_value(self, edge) -> float:
+        if self._edge_is_stacker_related(edge):
+            return float(self.STACKER_EDGE_Z)
+        return -1.0
+
+    def _refresh_all_edge_z_values(self):
+        for edge_id, edge_item in self.edge_items.items():
+            edge = self.graph_manager.get_edge(edge_id)
+            edge_item.setZValue(self._edge_z_value(edge))
+
+    def _refresh_all_edge_paths(self):
+        for edge_item in self.edge_items.values():
+            if edge_item is None:
+                continue
+            try:
+                edge_item.update_path()
+            except RuntimeError:
+                continue
+
+    def _resolve_connection_widget(self, item_id: str):
+        item_id = str(item_id or "").strip()
+        if item_id in self.node_widgets:
+            return self.node_widgets[item_id]
+        if item_id in self.stacker_items:
+            return self.stacker_items[item_id]
+        return None
+
+    def _sync_stacker_content_visibility(self):
+        scene = self._safe_canvas_scene()
+        for stacker_id, stacker_item in self.stacker_items.items():
+            visible = not self._stacker_hidden_by_collapsed_ancestor(stacker_id)
+            stacker_item.setVisible(visible)
+            if not visible and scene is not None and stacker_item.isSelected():
+                stacker_item.setSelected(False)
+
+        for node_id, node_widget in self.node_widgets.items():
+            node = self.graph_manager.get_node(node_id)
+            visible = not self._node_hidden_by_collapsed_ancestor(node)
+            node_widget.setVisible(visible)
+            if not visible and scene is not None and node_widget.isSelected():
+                node_widget.setSelected(False)
+
+        self._sync_edge_visibility()
+
+    def _find_free_stacker_position(self, width: float, height: float) -> QPointF:
+        view_center = self.canvas_widget.mapToScene(self.canvas_widget.viewport().rect().center())
+        candidate_origins = []
+        spacing = 42.0
+
+        for radius in range(0, 8):
+            if radius == 0:
+                candidate_origins.append(
+                    QPointF(view_center.x() - (width / 2.0), view_center.y() - (height / 2.0))
+                )
+                continue
+
+            offsets = [
+                (-radius, -radius), (0, -radius), (radius, -radius),
+                (-radius, 0),                     (radius, 0),
+                (-radius, radius),  (0, radius),  (radius, radius),
+            ]
+            for offset_x, offset_y in offsets:
+                candidate_origins.append(
+                    QPointF(
+                        view_center.x() - (width / 2.0) + (offset_x * (width + spacing)),
+                        view_center.y() - (height / 2.0) + (offset_y * (height + spacing)),
+                    )
+                )
+
+        occupied_rects = []
+        for node_widget in self.node_widgets.values():
+            if node_widget.scene():
+                occupied_rects.append(node_widget.sceneBoundingRect().adjusted(-18.0, -18.0, 18.0, 18.0))
+        for stacker_item in self.stacker_items.values():
+            if stacker_item.scene():
+                occupied_rects.append(
+                    QRectF(
+                        stacker_item.scenePos().x(),
+                        stacker_item.scenePos().y(),
+                        stacker_item.width,
+                        stacker_item.height,
+                    ).adjusted(-22.0, -22.0, 22.0, 22.0)
+                )
+
+        for origin in candidate_origins:
+            proposed_rect = QRectF(origin.x(), origin.y(), width, height)
+            if not any(proposed_rect.intersects(existing_rect) for existing_rect in occupied_rects):
+                return origin
+
+        return QPointF(view_center.x() - (width / 2.0), view_center.y() - (height / 2.0))
+
+    def _stacker_layout_rect(self, stacker_id: str) -> QRectF:
+        payload = self._find_stacker_payload(stacker_id)
+        if not payload:
+            return QRectF()
+
+        if self._is_stacker_collapsed(stacker_id):
+            current_rect = self._scene_rect_for_stacker_id(stacker_id)
+            if not current_rect.isValid():
+                current_rect = self._stacker_rect_from_payload(payload)
+            return QRectF(
+                current_rect.x(),
+                current_rect.y(),
+                self.STACKER_COLLAPSED_WIDTH,
+                self.STACKER_COLLAPSED_HEIGHT,
+            )
+
+        child_rects = []
+        for node_id in self._direct_child_node_ids(stacker_id):
+            rect = self._scene_rect_for_node_id(node_id)
+            if rect.isValid() and rect.width() > 0 and rect.height() > 0:
+                child_rects.append(rect)
+
+        for child_stacker_id in self._direct_child_stacker_ids(stacker_id):
+            rect = self._scene_rect_for_stacker_id(child_stacker_id)
+            if rect.isValid() and rect.width() > 0 and rect.height() > 0:
+                child_rects.append(rect)
+
+        if not child_rects:
+            current_rect = self._scene_rect_for_stacker_id(stacker_id)
+            center = current_rect.center()
+            return QRectF(
+                center.x() - (self.STACKER_MIN_WIDTH / 2.0),
+                center.y() - (self.STACKER_MIN_HEIGHT / 2.0),
+                self.STACKER_MIN_WIDTH,
+                self.STACKER_MIN_HEIGHT,
+            )
+
+        union_rect = QRectF(child_rects[0])
+        for rect in child_rects[1:]:
+            union_rect = union_rect.united(rect)
+
+        layout_rect = union_rect.adjusted(
+            -self.STACKER_SIDE_PADDING,
+            -self.STACKER_TOP_PADDING,
+            self.STACKER_SIDE_PADDING,
+            self.STACKER_BOTTOM_PADDING,
+        )
+
+        if layout_rect.width() < self.STACKER_MIN_WIDTH:
+            extra = (self.STACKER_MIN_WIDTH - layout_rect.width()) / 2.0
+            layout_rect.adjust(-extra, 0.0, extra, 0.0)
+        if layout_rect.height() < self.STACKER_MIN_HEIGHT:
+            extra = (self.STACKER_MIN_HEIGHT - layout_rect.height()) / 2.0
+            layout_rect.adjust(0.0, -extra, 0.0, extra)
+
+        return layout_rect
+
+    def _apply_stacker_layout_rect(self, stacker_id: str, rect: QRectF):
+        payload = self._find_stacker_payload(stacker_id)
+        stacker_item = self.stacker_items.get(stacker_id)
+        if not payload or not stacker_item:
+            return
+
+        rect = QRectF(rect)
+        payload["x"] = float(rect.x())
+        payload["y"] = float(rect.y())
+        payload["width"] = float(rect.width())
+        payload["height"] = float(rect.height())
+        stacker_item.set_geometry(rect)
+        stacker_item.set_collapsed(self._is_stacker_collapsed(stacker_id))
+        node_count, child_stacker_count = self._stacker_content_counts(stacker_id)
+        stacker_item.set_child_counts(node_count, child_stacker_count)
+
+    def _refresh_single_stacker_layout(self, stacker_id: str):
+        stacker_id = str(stacker_id or "").strip()
+        if not stacker_id:
+            return
+
+        rect = self._stacker_layout_rect(stacker_id)
+        if rect.isValid():
+            self._apply_stacker_layout_rect(stacker_id, rect)
+        self._apply_stacker_layers_to_items()
+        self._refresh_all_edge_paths()
+        self._sync_stacker_content_visibility()
+
+    def _refresh_all_stacker_layouts(self):
+        self._repair_stacker_links()
+        for stacker_id in self._stacker_ids_child_first():
+            rect = self._stacker_layout_rect(stacker_id)
+            if rect.isValid():
+                self._apply_stacker_layout_rect(stacker_id, rect)
+        self._apply_stacker_layers_to_items()
+        self._refresh_all_edge_paths()
+        self._sync_stacker_content_visibility()
+
+    def _refresh_stacker_parent_chain(self, parent_stacker_id: str):
+        parent_stacker_id = str(parent_stacker_id or "").strip()
+        visited = set()
+        current = parent_stacker_id
+        while current and current not in visited:
+            visited.add(current)
+            rect = self._stacker_layout_rect(current)
+            if rect.isValid():
+                self._apply_stacker_layout_rect(current, rect)
+            current = self._get_stacker_parent_id(current)
+        self._apply_stacker_layers_to_items()
+        self._refresh_all_edge_paths()
+        self._sync_stacker_content_visibility()
+
+    def _collect_stacker_descendants(self, stacker_id: str):
+        node_ids = []
+        stacker_ids = []
+        queue = [str(stacker_id or "").strip()]
+
+        while queue:
+            current_id = queue.pop(0)
+            for child_node_id in self._direct_child_node_ids(current_id):
+                if child_node_id not in node_ids:
+                    node_ids.append(child_node_id)
+            for child_stacker_id in self._direct_child_stacker_ids(current_id):
+                if child_stacker_id not in stacker_ids:
+                    stacker_ids.append(child_stacker_id)
+                    queue.append(child_stacker_id)
+
+        return node_ids, stacker_ids
+
+    def _capture_stacker_move_snapshot(self, stacker_id: str):
+        stacker_id = str(stacker_id or "").strip()
+        if not stacker_id:
+            return None
+
+        snapshot = {"stackers": {}, "nodes": {}}
+        tracked_stacker_ids = [stacker_id]
+        descendant_node_ids, descendant_stacker_ids = self._collect_stacker_descendants(stacker_id)
+        tracked_stacker_ids.extend(descendant_stacker_ids)
+
+        for tracked_stacker_id in tracked_stacker_ids:
+            payload = self._find_stacker_payload(tracked_stacker_id)
+            if payload is None:
+                continue
+            snapshot["stackers"][tracked_stacker_id] = QPointF(
+                float(payload.get("x", 0.0)),
+                float(payload.get("y", 0.0)),
+            )
+
+        for node_id in descendant_node_ids:
+            node = self.graph_manager.get_node(node_id)
+            if node is None:
+                continue
+            snapshot["nodes"][node_id] = QPointF(node.position)
+
+        return snapshot
+
+    def _restore_stacker_move_snapshot(self, snapshot):
+        if not snapshot:
+            return
+
+        self._applying_stacker_cascade = True
+        try:
+            for stacker_id, position in (snapshot.get("stackers") or {}).items():
+                payload = self._find_stacker_payload(stacker_id)
+                stacker_item = self.stacker_items.get(stacker_id)
+                if payload is None or stacker_item is None:
+                    continue
+                payload["x"] = float(position.x())
+                payload["y"] = float(position.y())
+                stacker_item.setPos(QPointF(position))
+
+            for node_id, position in (snapshot.get("nodes") or {}).items():
+                node = self.graph_manager.get_node(node_id)
+                node_widget = self.node_widgets.get(node_id)
+                if node is None or node_widget is None:
+                    continue
+                node.position = QPointF(position)
+                node_widget.setPos(QPointF(position))
+        finally:
+            self._applying_stacker_cascade = False
+
+    def _begin_drag_link_session(self, kind: str, item_id: str):
+        self._clear_drag_link_state()
+        self._drag_link_state = {
+            "kind": str(kind or "").strip(),
+            "item_id": str(item_id or "").strip(),
+            "candidate": None,
+            "armed_action": "",
+            "armed_target_id": "",
+            "hint_target_id": "",
+            "break_reference_rect": QRectF(),
+        }
+        current_parent = self._dragged_item_parent_id(kind, item_id)
+        if current_parent:
+            self._drag_link_state["break_reference_rect"] = self._scene_rect_for_stacker_id(current_parent)
+        self._update_drag_link_candidate()
+
+    def _clear_drag_link_hint(self):
+        state = self._drag_link_state or {}
+        target_id = str(state.get("hint_target_id", "") or "").strip()
+        if target_id and target_id in self.stacker_items:
+            self.stacker_items[target_id].clear_link_hint()
+        if self._drag_link_state is not None:
+            self._drag_link_state["hint_target_id"] = ""
+
+    def _show_drag_link_hint(self, stacker_id: str, text: str):
+        self._clear_drag_link_hint()
+        stacker_id = str(stacker_id or "").strip()
+        if not stacker_id:
+            return
+        stacker_item = self.stacker_items.get(stacker_id)
+        if not stacker_item:
+            return
+        stacker_item.set_link_hint(text)
+        if self._drag_link_state is not None:
+            self._drag_link_state["hint_target_id"] = stacker_id
+
+    def _clear_drag_link_state(self):
+        self._drag_link_hold_timer.stop()
+        self._clear_drag_link_hint()
+        for stacker_item in self.stacker_items.values():
+            stacker_item.clear_link_hint()
+        self._drag_link_state = None
+
+    def _dragged_item_scene_rect(self, kind: str, item_id: str) -> QRectF:
+        if kind == "node":
+            return self._scene_rect_for_node_id(item_id)
+        if kind == "stacker":
+            return self._scene_rect_for_stacker_id(item_id)
+        return QRectF()
+
+    def _dragged_item_parent_id(self, kind: str, item_id: str) -> str:
+        if kind == "node":
+            return self._get_node_parent_stacker_id(self.graph_manager.get_node(item_id))
+        if kind == "stacker":
+            return self._get_stacker_parent_id(item_id)
+        return ""
+
+    def _find_candidate_stacker_for_drag(self, kind: str, item_id: str, rect: QRectF) -> str:
+        if not rect.isValid():
+            return ""
+
+        exclude_ids = {str(item_id or "").strip()}
+        current_parent = self._dragged_item_parent_id(kind, item_id)
+        if current_parent:
+            exclude_ids.add(current_parent)
+
+        if kind == "stacker":
+            descendants = set(self._collect_stacker_descendants(item_id)[1])
+            exclude_ids.update(descendants)
+
+        candidates = []
+        for candidate_id, candidate_item in self.stacker_items.items():
+            if candidate_id in exclude_ids or not candidate_item.scene():
+                continue
+            candidate_rect = QRectF(
+                candidate_item.scenePos().x(),
+                candidate_item.scenePos().y(),
+                candidate_item.width,
+                candidate_item.height,
+            )
+            if not candidate_rect.isValid():
+                continue
+
+            if kind == "stacker":
+                if not self._stacker_can_accept_drag_link(candidate_rect, rect):
+                    continue
+            else:
+                if not candidate_rect.adjusted(8.0, 8.0, -8.0, -8.0).contains(rect.center()):
+                    continue
+
+            candidates.append((candidate_rect.width() * candidate_rect.height(), candidate_id))
+
+        if candidates:
+            candidates.sort(key=lambda entry: entry[0])
+            return candidates[0][1]
+        return ""
+
+    def _resolve_drag_link_candidate(self):
+        state = self._drag_link_state or {}
+        kind = str(state.get("kind", "") or "").strip()
+        item_id = str(state.get("item_id", "") or "").strip()
+        if not kind or not item_id:
+            return None
+
+        rect = self._dragged_item_scene_rect(kind, item_id)
+        if not rect.isValid():
+            return None
+
+        current_parent = self._dragged_item_parent_id(kind, item_id)
+        target_stacker_id = self._find_candidate_stacker_for_drag(kind, item_id, rect)
+
+        if target_stacker_id:
+            if self._item_has_edge_to_stacker(kind, item_id, target_stacker_id):
+                return {"action": "blocked", "stacker_id": target_stacker_id, "hint": "BLOCKED BY EDGE"}
+            return {"action": "create", "stacker_id": target_stacker_id}
+
+        if current_parent:
+            parent_rect = QRectF(state.get("break_reference_rect", QRectF()))
+            if not parent_rect.isValid() or parent_rect.width() <= 0 or parent_rect.height() <= 0:
+                parent_rect = self._scene_rect_for_stacker_id(current_parent)
+            break_ratio = 0.72 if kind == "stacker" else 0.55
+            if parent_rect.isValid() and self._stacker_breaks_drag_link(parent_rect, rect, break_ratio):
+                return {"action": "break", "stacker_id": current_parent}
+
+        return None
+
+    def _update_drag_link_candidate(self):
+        state = self._drag_link_state
+        if not state:
+            return
+
+        candidate = self._resolve_drag_link_candidate()
+        armed_action = str(state.get("armed_action", "") or "").strip()
+        armed_target_id = str(state.get("armed_target_id", "") or "").strip()
+
+        if armed_action and armed_target_id:
+            candidate_matches_armed = bool(
+                candidate
+                and str(candidate.get("action", "") or "").strip() == armed_action
+                and str(candidate.get("stacker_id", "") or "").strip() == armed_target_id
+            )
+
+            if candidate_matches_armed:
+                state["candidate"] = candidate
+                return
+
+            if not candidate:
+                return
+
+        if candidate == state.get("candidate"):
+            return
+
+        self._drag_link_hold_timer.stop()
+        self._clear_drag_link_hint()
+        state["candidate"] = candidate
+        state["armed_action"] = ""
+        state["armed_target_id"] = ""
+
+        if candidate:
+            self._drag_link_hold_timer.start()
+
+    def _arm_pending_drag_link_action(self):
+        state = self._drag_link_state
+        if not state:
+            return
+
+        candidate = state.get("candidate")
+        if not candidate:
+            return
+
+        action = str(candidate.get("action", "") or "").strip()
+        target_id = str(candidate.get("stacker_id", "") or "").strip()
+        if not action or not target_id:
+            return
+
+        state["armed_action"] = action
+        state["armed_target_id"] = target_id
+        hint_text = str(candidate.get("hint", "") or "").strip().upper()
+        if not hint_text:
+            hint_text = "LINK" if action == "create" else "UNLINK"
+        self._show_drag_link_hint(target_id, hint_text)
+
+    def _apply_drag_link_action_if_needed(self):
+        state = self._drag_link_state or {}
+        armed_action = str(state.get("armed_action", "") or "").strip()
+        target_id = str(state.get("armed_target_id", "") or "").strip()
+        kind = str(state.get("kind", "") or "").strip()
+        item_id = str(state.get("item_id", "") or "").strip()
+        if not armed_action or not target_id or not kind or not item_id:
+            self._clear_drag_link_state()
+            return
+
+        current_candidate = self._resolve_drag_link_candidate()
+        if (
+            not current_candidate
+            or str(current_candidate.get("action", "") or "").strip() != armed_action
+            or str(current_candidate.get("stacker_id", "") or "").strip() != target_id
+        ):
+            self._clear_drag_link_state()
+            return
+
+        if armed_action == "create":
+            self._link_item_to_stacker(kind, item_id, target_id)
+        elif armed_action == "break":
+            self._unlink_item_from_stacker(kind, item_id, target_id)
+
+        self._clear_drag_link_state()
+
+    def _stacker_still_contains_drag_item(self, parent_rect: QRectF, item_rect: QRectF) -> bool:
+        if not parent_rect.isValid() or not item_rect.isValid():
+            return False
+
+        inset_x = min(14.0, max(6.0, item_rect.width() * 0.18))
+        inset_y = min(14.0, max(6.0, item_rect.height() * 0.18))
+        probe_rect = item_rect.adjusted(inset_x, inset_y, -inset_x, -inset_y)
+        if probe_rect.width() <= 0 or probe_rect.height() <= 0:
+            probe_rect = item_rect
+
+        inner_parent = parent_rect.adjusted(8.0, 8.0, -8.0, -8.0)
+        if inner_parent.width() <= 0 or inner_parent.height() <= 0:
+            inner_parent = parent_rect
+
+        return inner_parent.contains(probe_rect)
+
+    def _stacker_can_accept_drag_link(self, parent_rect: QRectF, item_rect: QRectF) -> bool:
+        if not parent_rect.isValid() or not item_rect.isValid():
+            return False
+
+        inner_parent = parent_rect.adjusted(8.0, 8.0, -8.0, -8.0)
+        if inner_parent.width() <= 0 or inner_parent.height() <= 0:
+            inner_parent = parent_rect
+
+        if inner_parent.contains(item_rect.center()):
+            return True
+
+        overlap_rect = inner_parent.intersected(item_rect)
+        item_area = max(1.0, item_rect.width() * item_rect.height())
+        overlap_area = max(0.0, overlap_rect.width()) * max(0.0, overlap_rect.height())
+        overlap_ratio = overlap_area / item_area
+        return overlap_ratio >= 0.22
+
+    def _stacker_breaks_drag_link(self, parent_rect: QRectF, item_rect: QRectF, break_ratio: float = 0.55) -> bool:
+        if not parent_rect.isValid() or not item_rect.isValid():
+            return False
+
+        inner_parent = parent_rect.adjusted(10.0, 10.0, -10.0, -10.0)
+        if inner_parent.width() <= 0 or inner_parent.height() <= 0:
+            inner_parent = parent_rect
+
+        overlap_rect = inner_parent.intersected(item_rect)
+        item_area = max(1.0, item_rect.width() * item_rect.height())
+        overlap_area = max(0.0, overlap_rect.width()) * max(0.0, overlap_rect.height())
+        overlap_ratio = overlap_area / item_area
+
+        return overlap_ratio < float(break_ratio)
+
+    def _link_item_to_stacker(self, kind: str, item_id: str, target_stacker_id: str):
+        target_stacker_id = str(target_stacker_id or "").strip()
+        if not target_stacker_id:
+            return
+
+        if kind == "node":
+            node = self.graph_manager.get_node(item_id)
+            if node is None:
+                return
+            previous_parent = self._get_node_parent_stacker_id(node)
+            if previous_parent == target_stacker_id:
+                return
+            if self._item_has_edge_to_stacker("node", item_id, target_stacker_id):
+                self.statusBar().showMessage("Cannot link node into a stacker it is already connected to by edge")
+                return
+            self._set_node_parent_stacker_id(node, target_stacker_id)
+            self._refresh_stacker_parent_chain(previous_parent)
+            self._refresh_stacker_parent_chain(target_stacker_id)
+            self.graph_manager.save_state("Link node to stacker")
+            self.update_undo_redo_buttons()
+            self.statusBar().showMessage("Node linked to stacker")
+            return
+
+        if kind == "stacker":
+            if item_id == target_stacker_id or self._is_stacker_descendant(target_stacker_id, item_id):
+                return
+            previous_parent = self._get_stacker_parent_id(item_id)
+            if previous_parent == target_stacker_id:
+                return
+            if self._item_has_edge_to_stacker("stacker", item_id, target_stacker_id):
+                self.statusBar().showMessage("Cannot link stacker into a stacker it is already connected to by edge")
+                return
+            self._set_stacker_parent_id(item_id, target_stacker_id)
+            self._refresh_stacker_parent_chain(previous_parent)
+            self._refresh_stacker_parent_chain(target_stacker_id)
+            self.graph_manager.save_state("Link stacker to stacker")
+            self.update_undo_redo_buttons()
+            self.statusBar().showMessage("Stacker linked")
+
+    def _item_has_edge_to_stacker(self, kind: str, item_id: str, target_stacker_id: str) -> bool:
+        target_stacker_id = str(target_stacker_id or "").strip()
+        item_id = str(item_id or "").strip()
+        if not target_stacker_id or not item_id:
+            return False
+
+        related_ids = {item_id}
+        if kind == "stacker":
+            node_ids, stacker_ids = self._collect_stacker_descendants(item_id)
+            related_ids.update(str(node_id) for node_id in node_ids)
+            related_ids.update(str(stacker_id) for stacker_id in stacker_ids)
+
+        for edge in self.graph_manager.graph_data.edges.values():
+            source_id = str(getattr(edge, "source_id", "") or "").strip()
+            target_id = str(getattr(edge, "target_id", "") or "").strip()
+            if source_id == target_stacker_id and target_id in related_ids:
+                return True
+            if target_id == target_stacker_id and source_id in related_ids:
+                return True
+
+        return False
+
+    def _unlink_item_from_stacker(self, kind: str, item_id: str, source_stacker_id: str):
+        source_stacker_id = str(source_stacker_id or "").strip()
+        if kind == "node":
+            node = self.graph_manager.get_node(item_id)
+            if node is None or self._get_node_parent_stacker_id(node) != source_stacker_id:
+                return
+            self._set_node_parent_stacker_id(node, "")
+            self._refresh_stacker_parent_chain(source_stacker_id)
+            self.graph_manager.save_state("Unlink node from stacker")
+            self.update_undo_redo_buttons()
+            self.statusBar().showMessage("Node unlinked from stacker")
+            return
+
+        if kind == "stacker":
+            if self._get_stacker_parent_id(item_id) != source_stacker_id:
+                return
+            self._set_stacker_parent_id(item_id, "")
+            self._refresh_stacker_parent_chain(source_stacker_id)
+            self.graph_manager.save_state("Unlink stacker from stacker")
+            self.update_undo_redo_buttons()
+            self.statusBar().showMessage("Stacker unlinked")
+
+    def _stacker_depth_to_root(self, stacker_id: str, memo=None) -> int:
+        stacker_id = str(stacker_id or "").strip()
+        if not stacker_id:
+            return 0
+
+        if memo is None:
+            memo = {}
+        if stacker_id in memo:
+            return memo[stacker_id]
+
+        visited = {stacker_id}
+        depth = 0
+        current = self._get_stacker_parent_id(stacker_id)
+        while current and current not in visited:
+            depth += 1
+            visited.add(current)
+            current = self._get_stacker_parent_id(current)
+
+        memo[stacker_id] = depth
+        return depth
 
     def _safe_canvas_scene(self):
         canvas_widget = getattr(self, "canvas_widget", None)
@@ -864,42 +1973,30 @@ class DigitalDetectiveBoard(QMainWindow):
 
         return scene
 
-    def _normalize_stacker_layers(self):
+    def _apply_stacker_layers_to_items(self):
         self._ensure_stacker_metadata()
-        stackers = self.graph_manager.graph_data.metadata.get("stackers", [])
-        ordered = []
-        for original_index, payload in enumerate(stackers):
+        metadata_order = {}
+        for index, payload in enumerate(self.graph_manager.graph_data.metadata.get("stackers", [])):
             if not isinstance(payload, dict):
                 continue
-            try:
-                layer_value = int(payload.get("layer", original_index))
-            except (TypeError, ValueError):
-                layer_value = original_index
-            ordered.append((layer_value, original_index, payload))
+            stacker_id = str(payload.get("id", "") or "").strip()
+            if stacker_id and stacker_id not in metadata_order:
+                metadata_order[stacker_id] = index
 
-        ordered.sort(key=lambda entry: (entry[0], entry[1]))
-        for new_layer, (_, _, payload) in enumerate(ordered):
-            payload["layer"] = new_layer
+        memo = {}
+        ordered_ids = sorted(
+            list(self.stacker_items.keys()),
+            key=lambda sid: (
+                self._stacker_depth_to_root(sid, memo),
+                metadata_order.get(sid, 10_000),
+            ),
+        )
 
-    def _next_stacker_layer(self) -> int:
-        self._normalize_stacker_layers()
-        stackers = [
-            payload
-            for payload in self.graph_manager.graph_data.metadata.get("stackers", [])
-            if isinstance(payload, dict)
-        ]
-        return len(stackers)
-
-    def _apply_stacker_layers_to_items(self):
-        for stacker_id, stacker_item in self.stacker_items.items():
-            payload = self._find_stacker_payload(stacker_id)
-            if not payload:
+        for z_offset, stacker_id in enumerate(ordered_ids):
+            stacker_item = self.stacker_items.get(stacker_id)
+            if stacker_item is None:
                 continue
-            try:
-                layer = int(payload.get("layer", 0))
-            except (TypeError, ValueError):
-                layer = 0
-            stacker_item.setZValue(self._stacker_z_for_layer(layer))
+            stacker_item.setZValue(self.STACKER_Z_BASE + float(z_offset))
 
     def _selected_stacker_id_from_scene(self) -> str:
         scene = self._safe_canvas_scene()
@@ -926,19 +2023,20 @@ class DigitalDetectiveBoard(QMainWindow):
             stacker_id = str(payload.get("id", "")).strip()
             if not stacker_id:
                 continue
-            try:
-                layer = int(payload.get("layer", 0))
-            except (TypeError, ValueError):
-                layer = 0
+            parent_id = str(payload.get("parent_stacker_id", "") or "").strip()
+            parent_payload = self._find_stacker_payload(parent_id) if parent_id else None
+            parent_name = ""
+            if isinstance(parent_payload, dict):
+                parent_name = str(parent_payload.get("name", "")).strip()
             entries.append(
                 {
                     "id": stacker_id,
                     "name": str(payload.get("name", "Stacker")).strip() or "Stacker",
-                    "layer": layer,
+                    "parent_name": parent_name,
                 }
             )
 
-        entries.sort(key=lambda item: item["layer"], reverse=True)
+        entries.sort(key=lambda item: item["name"].lower())
         current_selected = str(selected_id or self._selected_stacker_id_from_scene() or "")
         self.stackers_panel.set_stackers(entries, selected_id=current_selected)
 
@@ -975,164 +2073,119 @@ class DigitalDetectiveBoard(QMainWindow):
         finally:
             self._syncing_stacker_selection = False
 
-    def _on_stacker_layer_action_requested(self, stacker_id: str, action: str):
+    def _toggle_stacker_collapsed(self, stacker_id: str):
         stacker_id = str(stacker_id or "").strip()
-        action = str(action or "").strip()
-        if not stacker_id or not action:
+        if not stacker_id:
             return
 
-        self._ensure_stacker_metadata()
-        self._normalize_stacker_layers()
-        ordered_payloads = sorted(
-            [
-                payload
-                for payload in self.graph_manager.graph_data.metadata.get("stackers", [])
-                if isinstance(payload, dict) and payload.get("id")
-            ],
-            key=lambda payload: int(payload.get("layer", 0)),
-        )
-        ordered_ids = [str(payload.get("id", "")) for payload in ordered_payloads]
-        if stacker_id not in ordered_ids or len(ordered_ids) < 2:
-            return
+        collapsed = not self._is_stacker_collapsed(stacker_id)
+        self._set_stacker_collapsed(stacker_id, collapsed)
+        self._refresh_single_stacker_layout(stacker_id)
 
-        current_index = ordered_ids.index(stacker_id)
-        target_index = current_index
-        if action == "to_front":
-            target_index = len(ordered_ids) - 1
-        elif action == "to_back":
-            target_index = 0
-        elif action == "forward":
-            target_index = min(len(ordered_ids) - 1, current_index + 1)
-        elif action == "backward":
-            target_index = max(0, current_index - 1)
+        parent_id = self._get_stacker_parent_id(stacker_id)
+        if parent_id:
+            self._refresh_stacker_parent_chain(parent_id)
 
-        if target_index == current_index:
-            return
-
-        moved_id = ordered_ids.pop(current_index)
-        ordered_ids.insert(target_index, moved_id)
-
-        for layer, ordered_id in enumerate(ordered_ids):
-            payload = self._find_stacker_payload(ordered_id)
-            if payload:
-                payload["layer"] = layer
-
-        self._apply_stacker_layers_to_items()
-        self._refresh_stackers_panel(selected_id=stacker_id)
-        self.graph_manager.save_state("Reorder stacker layer")
+        self.graph_manager.save_state("Collapse stacker" if collapsed else "Expand stacker")
         self.update_undo_redo_buttons()
-        self.statusBar().showMessage("Stacker layer updated")
+        self.statusBar().showMessage("Stacker collapsed" if collapsed else "Stacker expanded")
 
     def _add_stacker_item(self, payload: dict):
         stacker_item = StackerItem(payload)
         stacker_item.dragged_delta.connect(self._on_stacker_dragged_delta)
+        stacker_item.drag_started.connect(self._on_stacker_drag_started)
+        stacker_item.drag_finished.connect(self._on_stacker_drag_finished)
+        stacker_item.position_changed.connect(self._on_stacker_item_position_changed)
         stacker_item.moved.connect(self._on_stacker_moved)
-        stacker_item.resized.connect(self._on_stacker_resized)
+        stacker_item.toggle_requested.connect(self._toggle_stacker_collapsed)
+        stacker_item.connection_requested.connect(self.start_connection)
         stacker_item.edit_requested.connect(self._edit_stacker_by_id)
         stacker_item.delete_requested.connect(self._delete_stacker_by_id)
         stacker_item.node_creation_requested.connect(self.canvas_widget.create_node_at_position)
         stacker_item.stacker_creation_requested.connect(self.toggle_stacker_creation_mode)
         stacker_item.delete_selected_requested.connect(self.delete_selected_scene_items)
-        try:
-            layer = int(payload.get("layer", 0))
-        except (TypeError, ValueError):
-            layer = 0
-        stacker_item.setZValue(self._stacker_z_for_layer(layer))
+        stacker_item.setZValue(self.STACKER_Z_BASE)
         self.canvas_widget.scene.addItem(stacker_item)
         self.stacker_items[stacker_item.stacker_id] = stacker_item
 
     def load_stackers_from_metadata(self):
         self._ensure_stacker_metadata()
         self.stacker_items.clear()
-        self._normalize_stacker_layers()
-        payloads = sorted(
-            [
-                payload
-                for payload in self.graph_manager.graph_data.metadata.get("stackers", [])
-                if isinstance(payload, dict)
-            ],
-            key=lambda payload: int(payload.get("layer", 0)),
-        )
+        self._repair_stacker_links()
+        payloads = [
+            payload
+            for payload in self.graph_manager.graph_data.metadata.get("stackers", [])
+            if isinstance(payload, dict)
+        ]
         for payload in payloads:
             if not isinstance(payload, dict):
                 continue
             if not payload.get("id"):
                 payload["id"] = self._next_stacker_id()
             self._add_stacker_item(payload)
+        self._apply_stacker_layers_to_items()
+        self._refresh_all_edge_z_values()
         self._refresh_stackers_panel()
 
     def create_stacker_from_panel(self, payload: dict):
+        self._clear_drag_link_state()
+        self._active_stacker_drag_contexts.clear()
         self._ensure_stacker_metadata()
-        layer = self._next_stacker_layer()
 
-        width = float(payload.get("width", 360))
-        height = float(payload.get("height", 220))
+        width = float(payload.get("width", self.STACKER_MIN_WIDTH))
+        height = float(payload.get("height", self.STACKER_MIN_HEIGHT))
         x = payload.get("x")
         y = payload.get("y")
 
         if x is None or y is None:
-            view_center = self.canvas_widget.mapToScene(self.canvas_widget.viewport().rect().center())
-            x = float(view_center.x() - width / 2.0)
-            y = float(view_center.y() - height / 2.0)
+            free_origin = self._find_free_stacker_position(width, height)
+            x = float(free_origin.x())
+            y = float(free_origin.y())
 
         stacker_payload = {
             "id": self._next_stacker_id(),
             "name": str(payload.get("name", "New Stacker")).strip() or "New Stacker",
             "type": str(payload.get("type", "")).strip(),
-            "color": str(payload.get("color", "#7FB3D5")).strip() or "#7FB3D5",
+            "color": "#292929",
+            "collapsed": False,
             "width": width,
             "height": height,
             "x": float(x),
             "y": float(y),
-            "layer": layer,
+            "parent_stacker_id": "",
         }
 
+        self._normalize_stacker_payload(stacker_payload)
         self.graph_manager.graph_data.metadata["stackers"].append(stacker_payload)
         self._add_stacker_item(stacker_payload)
+        self._refresh_single_stacker_layout(stacker_payload["id"])
         created_item = self.stacker_items.get(stacker_payload["id"])
+        scene = self._safe_canvas_scene()
+        if scene is not None:
+            try:
+                scene.clearSelection()
+            except RuntimeError:
+                scene = None
         if created_item:
             created_item.setSelected(True)
         self._refresh_stackers_panel(selected_id=stacker_payload["id"])
+        self._clear_drag_link_state()
         self.graph_manager.save_state("Add stacker")
         self.update_undo_redo_buttons()
         self.statusBar().showMessage(f"Created stacker: {stacker_payload['name']}")
 
     def toggle_stacker_creation_mode(self):
-        if self.canvas_widget.stacker_selection_mode:
-            self.canvas_widget.cancel_stacker_selection()
-            return
-
-        self._clear_pending_stacker_preview()
-        self.canvas_widget.start_stacker_selection()
-        self.stackers_panel.set_selection_mode(True)
-        self.statusBar().showMessage("Drag on the canvas to create a new stacker")
-
-    def on_stacker_area_selected(self, rect: QRectF):
-        self.stackers_panel.set_selection_mode(False)
-        self._show_pending_stacker_preview(rect)
-
-        dialog = StackerDetailsDialog(self, default_color="#5DADE2")
+        self._clear_drag_link_state()
+        dialog = StackerDetailsDialog(self, default_color="#292929")
         if not dialog.exec():
-            self._clear_pending_stacker_preview()
             self.statusBar().showMessage("Stacker creation cancelled")
             return
+        self.create_stacker_from_panel(dialog.get_payload())
 
-        payload = dialog.get_payload()
-        payload.update(
-            {
-                "type": "",
-                "width": float(rect.width()),
-                "height": float(rect.height()),
-                "x": float(rect.x()),
-                "y": float(rect.y()),
-            }
-        )
-        self.create_stacker_from_panel(payload)
-        self._clear_pending_stacker_preview()
+    def on_stacker_area_selected(self, rect: QRectF):
+        self.toggle_stacker_creation_mode()
 
     def on_stacker_selection_cancelled(self):
-        self.stackers_panel.set_selection_mode(False)
-        self._clear_pending_stacker_preview()
         self.statusBar().showMessage("Stacker creation cancelled")
 
     def _show_pending_stacker_preview(self, rect: QRectF):
@@ -1155,6 +2208,57 @@ class DigitalDetectiveBoard(QMainWindow):
             pass
         self.pending_stacker_preview_item = None
 
+    def _on_stacker_drag_started(self, stacker_id: str):
+        self._active_stacker_drag_contexts.pop(str(stacker_id or "").strip(), None)
+        self._active_stacker_move_snapshot = self._capture_stacker_move_snapshot(stacker_id)
+        self._begin_drag_link_session("stacker", stacker_id)
+
+    def _on_stacker_drag_finished(self, stacker_id: str):
+        snapshot = self._active_stacker_move_snapshot or {}
+        self._active_stacker_move_snapshot = None
+        state = self._drag_link_state or {}
+        if (
+            str(state.get("kind", "") or "").strip() == "stacker"
+            and str(state.get("item_id", "") or "").strip() == str(stacker_id or "").strip()
+        ):
+            self._apply_drag_link_action_if_needed()
+        else:
+            self._clear_drag_link_state()
+
+        current_parent = self._get_stacker_parent_id(stacker_id)
+        if current_parent:
+            parent_rect = self._scene_rect_for_stacker_id(current_parent)
+            item_rect = self._scene_rect_for_stacker_id(stacker_id)
+            if (
+                parent_rect.isValid()
+                and item_rect.isValid()
+                and not self._stacker_still_contains_drag_item(parent_rect, item_rect)
+            ):
+                self._restore_stacker_move_snapshot(snapshot)
+                self._refresh_stacker_parent_chain(current_parent)
+                self.statusBar().showMessage("Hold to UNLINK before moving stacker outside")
+
+    def _on_stacker_item_position_changed(self, stacker_id: str, position: QPointF):
+        if self._applying_stacker_cascade:
+            return
+
+        for edge_item in self.edge_items.values():
+            source_id = getattr(getattr(edge_item.source_node, "node", None), "id", None) or getattr(edge_item.source_node, "stacker_id", "")
+            target_id = getattr(getattr(edge_item.target_node, "node", None), "id", None) or getattr(edge_item.target_node, "stacker_id", "")
+            if source_id == stacker_id or target_id == stacker_id:
+                edge_item.update_path()
+
+        parent_id = self._get_stacker_parent_id(stacker_id)
+        if parent_id:
+            self._refresh_stacker_parent_chain(parent_id)
+
+        state = self._drag_link_state or {}
+        if (
+            str(state.get("kind", "") or "").strip() == "stacker"
+            and str(state.get("item_id", "") or "").strip() == str(stacker_id or "").strip()
+        ):
+            self._update_drag_link_candidate()
+
     def _on_stacker_moved(self, stacker_id: str, position: QPointF):
         payload = self._find_stacker_payload(stacker_id)
         if not payload:
@@ -1171,6 +2275,7 @@ class DigitalDetectiveBoard(QMainWindow):
         payload["y"] = float(position.y())
         self._active_stacker_drag_contexts.pop(stacker_id, None)
         self.graph_manager.save_state("Move stacker")
+        self.update_undo_redo_buttons()
         self.statusBar().showMessage(f"Moved stacker: {payload.get('name', stacker_id)}")
 
     def _on_stacker_dragged_delta(self, stacker_id: str, delta: QPointF):
@@ -1181,35 +2286,16 @@ class DigitalDetectiveBoard(QMainWindow):
 
         context = self._active_stacker_drag_contexts.get(stacker_id)
         if context is None:
-            source_payload = self._find_stacker_payload(stacker_id)
-            if not source_payload:
-                return
-            source_rect = QRectF(
-                float(source_payload.get("x", 0.0)),
-                float(source_payload.get("y", 0.0)),
-                float(source_payload.get("width", 0.0)),
-                float(source_payload.get("height", 0.0)),
-            )
             tracked_items = []
-            for item in self.canvas_widget.scene.items():
-                if isinstance(item, StackerItem):
-                    if item.stacker_id == stacker_id:
-                        continue
-                    child_payload = self._find_stacker_payload(item.stacker_id)
-                    if not child_payload:
-                        continue
-                    child_rect = QRectF(
-                        float(child_payload.get("x", 0.0)),
-                        float(child_payload.get("y", 0.0)),
-                        float(child_payload.get("width", 0.0)),
-                        float(child_payload.get("height", 0.0)),
-                    )
-                    if source_rect.contains(child_rect):
-                        tracked_items.append(item)
-                elif isinstance(item, NodeWidget):
-                    node_rect = item.sceneBoundingRect().adjusted(1.0, 1.0, -1.0, -1.0)
-                    if source_rect.contains(node_rect):
-                        tracked_items.append(item)
+            descendant_node_ids, descendant_stacker_ids = self._collect_stacker_descendants(stacker_id)
+            for node_id in descendant_node_ids:
+                item = self.node_widgets.get(node_id)
+                if item is not None:
+                    tracked_items.append(item)
+            for child_stacker_id in descendant_stacker_ids:
+                item = self.stacker_items.get(child_stacker_id)
+                if item is not None:
+                    tracked_items.append(item)
 
             context = {"items": tracked_items}
             self._active_stacker_drag_contexts[stacker_id] = context
@@ -1230,22 +2316,6 @@ class DigitalDetectiveBoard(QMainWindow):
                         child_payload["y"] = float(item.scenePos().y())
         finally:
             self._applying_stacker_cascade = False
-
-    def _on_stacker_resized(self, stacker_id: str, width: float, height: float):
-        payload = self._find_stacker_payload(stacker_id)
-        if not payload:
-            return
-
-        old_width = float(payload.get("width", 0.0))
-        old_height = float(payload.get("height", 0.0))
-        if abs(old_width - width) < 0.01 and abs(old_height - height) < 0.01:
-            return
-
-        payload["width"] = float(width)
-        payload["height"] = float(height)
-        self.graph_manager.save_state("Resize stacker")
-        self.update_undo_redo_buttons()
-        self.statusBar().showMessage(f"Resized stacker to {int(width)}x{int(height)}")
 
     def delete_selected_stacker(self):
         scene = self._safe_canvas_scene()
@@ -1275,12 +2345,11 @@ class DigitalDetectiveBoard(QMainWindow):
             return
 
         current_name = str(payload.get("name", "Stacker")).strip() or "Stacker"
-        current_color = str(payload.get("color", "#5DADE2")).strip() or "#5DADE2"
 
         dialog = StackerDetailsDialog(
             self,
             default_name=current_name,
-            default_color=current_color,
+            default_color="#292929",
         )
         dialog.setWindowTitle("Edit Stacker")
         if not dialog.exec():
@@ -1288,15 +2357,12 @@ class DigitalDetectiveBoard(QMainWindow):
 
         data = dialog.get_payload()
         new_name = str(data.get("name", current_name)).strip() or current_name
-        new_color = str(data.get("color", current_color)).strip() or current_color
 
-        if new_name == current_name and new_color.upper() == current_color.upper():
+        if new_name == current_name:
             return
 
         payload["name"] = new_name
-        payload["color"] = new_color
         stacker_item.name = new_name
-        stacker_item.color_hex = new_color
         stacker_item.update()
         self._refresh_stackers_panel(selected_id=stacker_id)
         self.graph_manager.save_state("Edit stacker")
@@ -1315,16 +2381,36 @@ class DigitalDetectiveBoard(QMainWindow):
         if not payload or not stacker_item:
             return False
 
+        parent_id = str(payload.get("parent_stacker_id", "") or "").strip()
+        for node in self.graph_manager.graph_data.nodes.values():
+            if self._get_node_parent_stacker_id(node) == stacker_id:
+                self._set_node_parent_stacker_id(node, parent_id)
+        for child_payload in self.graph_manager.graph_data.metadata.get("stackers", []):
+            if str(child_payload.get("parent_stacker_id", "") or "").strip() == stacker_id:
+                child_payload["parent_stacker_id"] = parent_id
+
         self.graph_manager.graph_data.metadata["stackers"] = [
             item
             for item in self.graph_manager.graph_data.metadata.get("stackers", [])
             if str(item.get("id", "")) != stacker_id
         ]
 
+        edges_to_remove = []
+        for edge_id, edge_item in self.edge_items.items():
+            edge = self.graph_manager.get_edge(edge_id)
+            if edge is None or edge.source_id == stacker_id or edge.target_id == stacker_id:
+                edge_item.dispose()
+                self.canvas_widget.scene.removeItem(edge_item)
+                edges_to_remove.append(edge_id)
+        for edge_id in edges_to_remove:
+            self.graph_manager.remove_edge(edge_id, save_state=False)
+            if edge_id in self.edge_items:
+                del self.edge_items[edge_id]
+
         self.canvas_widget.scene.removeItem(stacker_item)
         del self.stacker_items[stacker_id]
-        self._normalize_stacker_layers()
         self._apply_stacker_layers_to_items()
+        self._refresh_stacker_parent_chain(parent_id)
         if refresh_panel:
             self._refresh_stackers_panel()
         if save_state:
@@ -1380,7 +2466,7 @@ class DigitalDetectiveBoard(QMainWindow):
     def open_beatnote_workspace(self):
         from features.beatnote.ui.beatnote_main_window import BeatNoteMainWindow
 
-        window = BeatNoteMainWindow.launch(parent=self)
+        window = BeatNoteMainWindow.launch(parent=self, service=self.beatnote_service)
         if window is not None and getattr(window, "beatnote_panel", None) is not None:
             window.beatnote_panel.reload_notes()
 
@@ -1528,24 +2614,23 @@ class DigitalDetectiveBoard(QMainWindow):
             return
 
         sizes = self.main_splitter.sizes()
-        if len(sizes) < 3:
+        if len(sizes) < 2:
             return
 
         if visible:
             self.detail_panel.show()
-            detail_width = max(300, int(self._detail_panel_last_width or 320))
-            available = max(340, sum(sizes))
-            left = sizes[0]
-            center = max(300, available - left - detail_width)
-            self.main_splitter.setSizes([left, center, detail_width])
+            detail_width = max(450, int(self._detail_panel_last_width or 460))
+            available = max(720, sum(sizes))
+            canvas_width = max(300, available - detail_width)
+            self.main_splitter.setSizes([canvas_width, detail_width])
             return
 
-        current_width = sizes[2]
+        current_width = sizes[1]
         if current_width > 0:
             self._detail_panel_last_width = current_width
 
         self.detail_panel.hide()
-        self.main_splitter.setSizes([sizes[0], sizes[1] + sizes[2], 0])
+        self.main_splitter.setSizes([sizes[0] + sizes[1], 0])
 
     def open_node_settings_dialog(self):
         if hasattr(self, 'toolbox') and self.toolbox:
@@ -1560,9 +2645,30 @@ class DigitalDetectiveBoard(QMainWindow):
         
         # Verificar ferramentas em falta
         missing_tools = download_manager.check_missing_tools()
+        if not missing_tools:
+            self._emit_ndc_tool_event(
+                "analysis_captured",
+                tool_name="tools_downloader",
+                surface="analysis_utility",
+                result_summary="Required tools scan found no missing tools.",
+                result_status="success",
+                result_count=0,
+            )
         
         # Se houver ferramentas em falta, perguntar se quer instalar
         if missing_tools:
+            preview = ", ".join(missing_tools[:5])
+            self._emit_ndc_tool_event(
+                "analysis_captured",
+                tool_name="tools_downloader",
+                surface="analysis_utility",
+                result_summary=compact_tool_summary(
+                    f"Required tools scan found {len(missing_tools)} missing tool(s): {preview}."
+                ),
+                result_status="partial",
+                result_count=len(missing_tools),
+                artifact_refs=tuple(missing_tools[:5]),
+            )
             warning_text = (
                 "Algumas ferramentas de segurança não foram encontradas:\n\n"
                 f"{', '.join(missing_tools)}\n\n"
@@ -1579,7 +2685,21 @@ class DigitalDetectiveBoard(QMainWindow):
             
             if reply == QMessageBox.StandardButton.Yes:
                 # Solicitar instalação
-                if download_manager.request_installation():
+                install_success = download_manager.request_installation()
+                self._emit_ndc_tool_event(
+                    "executed",
+                    tool_name="tools_downloader",
+                    surface="helper_window",
+                    result_summary=(
+                        f"Automatic installation flow completed for {len(missing_tools)} missing tool(s)."
+                        if install_success
+                        else f"Automatic installation flow did not complete successfully for {len(missing_tools)} missing tool(s)."
+                    ),
+                    result_status="success" if install_success else "failure",
+                    result_count=len(missing_tools),
+                    artifact_refs=tuple(missing_tools[:5]),
+                )
+                if install_success:
                     QMessageBox.information(
                         self,
                         "Instalação Concluída",
@@ -1588,6 +2708,16 @@ class DigitalDetectiveBoard(QMainWindow):
                     # Atualizar a UI do tools manager
                     if hasattr(self, 'tools_integration') and self.tools_integration.tools_manager:
                         self.tools_integration.tools_manager.check_available_tools()
+            else:
+                self._emit_ndc_tool_event(
+                    "helper_invoked",
+                    tool_name="tools_downloader",
+                    surface="helper_window",
+                    result_summary=f"Automatic installation prompt was declined for {len(missing_tools)} missing tool(s).",
+                    result_status="cancelled",
+                    result_count=len(missing_tools),
+                    artifact_refs=tuple(missing_tools[:5]),
+                )
 
     def _load_accessibility_preferences(self) -> None:
         settings = QSettings('BeatRooter', 'BeatRooter')
@@ -1664,7 +2794,18 @@ class DigitalDetectiveBoard(QMainWindow):
         """Open BeatHelper manual finder dialog"""
         from ui.beat_helper_dialog import BeatHelperDialog
         
-        dialog = BeatHelperDialog(self)
+        self._emit_ndc_tool_event(
+            "helper_invoked",
+            tool_name="beathelper_manual_finder",
+            surface="helper_window",
+            result_summary="BeatHelper manual finder opened.",
+        )
+
+        dialog = BeatHelperDialog(
+            self,
+            ndc_recorder=self._emit_ndc_tool_event,
+            ndc_related_node_id=self._current_ndc_related_node_id(),
+        )
         dialog.exec()
         
         self.statusBar().showMessage("BeatHelper closed")
@@ -1743,11 +2884,13 @@ class DigitalDetectiveBoard(QMainWindow):
         # Tool binary checks
         lines.append("Core binaries:")
         binaries = ["tshark", "dumpcap", "nmap", "masscan", "sqlmap", "gobuster", "exiftool"]
+        found_binaries = 0
         for binary in binaries:
             path = shutil.which(binary)
             if not path:
                 lines.append(f"- {binary}: NOT FOUND in PATH")
                 continue
+            found_binaries += 1
             executable = os.access(path, os.X_OK)
             lines.append(f"- {binary}: {path} (executable={executable})")
 
@@ -1819,6 +2962,21 @@ class DigitalDetectiveBoard(QMainWindow):
                 lines.append(f"- {item}")
 
         report = "\n".join(lines)
+        recommendations_count = len(recommendations)
+        self._emit_ndc_tool_event(
+            "analysis_captured",
+            tool_name="permissions_diagnostics",
+            surface="analysis_utility",
+            result_summary=(
+                f"Permissions diagnostics checked {len(binaries)} core binaries; "
+                f"{found_binaries} found, {len(binaries) - found_binaries} missing, "
+                f"{recommendations_count} recommendation(s) generated."
+            ),
+            result_status="success" if recommendations_count == 0 else "partial",
+            result_count=len(binaries),
+            command_ref="permissions_diagnostics",
+            artifact_refs=tuple(binaries),
+        )
         self._show_text_report_dialog("Permissions Diagnostics", report)
         self.statusBar().showMessage("Permissions diagnostics completed")
 
@@ -1932,10 +3090,24 @@ class DigitalDetectiveBoard(QMainWindow):
                 )
 
             if reply != QMessageBox.StandardButton.Yes:
+                self._emit_ndc_tool_event(
+                    "helper_invoked",
+                    tool_name="flipper_workspace_importer",
+                    surface="import_wizard",
+                    result_summary="Flipper workspace import was cancelled before selecting a root folder.",
+                    result_status="cancelled",
+                )
                 return
 
             manual_root = QFileDialog.getExistingDirectory(self, 'Select Flipper Root Folder')
             if not manual_root:
+                self._emit_ndc_tool_event(
+                    "helper_invoked",
+                    tool_name="flipper_workspace_importer",
+                    surface="import_wizard",
+                    result_summary="Flipper workspace import was cancelled without choosing a folder.",
+                    result_status="cancelled",
+                )
                 return
             root_paths = [manual_root]
             settings.setValue('flipper_last_root_path', manual_root)
@@ -1946,6 +3118,15 @@ class DigitalDetectiveBoard(QMainWindow):
         if self.flipper_explorer_dialog and self.flipper_explorer_dialog.isVisible():
             self.flipper_explorer_dialog.raise_()
             self.flipper_explorer_dialog.activateWindow()
+            self._emit_ndc_tool_event(
+                "helper_invoked",
+                tool_name="flipper_workspace_importer",
+                surface="import_wizard",
+                result_summary="Flipper explorer was reused for the current workspace root.",
+                result_status="success",
+                result_count=len(root_paths),
+                artifact_refs=build_artifact_refs(root_paths),
+            )
             return
 
         dialog = FlipperExplorerDialog(root_paths, self)
@@ -1956,6 +3137,18 @@ class DigitalDetectiveBoard(QMainWindow):
         dialog.show()
 
         self.flipper_explorer_dialog = dialog
+        self._emit_ndc_tool_event(
+            "helper_invoked",
+            tool_name="flipper_workspace_importer",
+            surface="import_wizard",
+            result_summary=compact_tool_summary(
+                f"Flipper explorer opened with {len(root_paths)} root path(s)."
+            ),
+            result_status="success",
+            result_count=len(root_paths),
+            target_ref=selected_serial_port or None,
+            artifact_refs=build_artifact_refs(root_paths),
+        )
         if rpc_without_filesystem:
             self.statusBar().showMessage(f'Flipper RPC detected ({selected_serial_port}). Using selected storage path.')
         else:
@@ -1999,6 +3192,16 @@ class DigitalDetectiveBoard(QMainWindow):
             parsed_artifacts.append((file_path, artifact))
 
         if not parsed_artifacts:
+            self._emit_ndc_tool_event(
+                "imported",
+                tool_name="flipper_workspace_importer",
+                surface="import_wizard",
+                result_summary=f"Selected {len(valid_paths)} Flipper file(s), but none were parsed into canvas nodes.",
+                result_status="failure",
+                result_count=0,
+                target_ref=root_path or None,
+                artifact_refs=build_artifact_refs(valid_paths, root_path=root_path),
+            )
             QMessageBox.information(self, 'Flipper Import', 'No selected files could be parsed.')
             return
 
@@ -2041,6 +3244,18 @@ class DigitalDetectiveBoard(QMainWindow):
         self.statusBar().showMessage(
             f"Imported {len(imported)} Flipper file(s): {module_summary or 'general'}"
         )
+        self._emit_ndc_tool_event(
+            "imported",
+            tool_name="flipper_workspace_importer",
+            surface="import_wizard",
+            result_summary=compact_tool_summary(
+                f"Imported {len(imported)} Flipper file(s) into the canvas. Modules: {module_summary or 'general'}."
+            ),
+            result_status="success",
+            result_count=len(imported),
+            target_ref=root_path or None,
+            artifact_refs=build_artifact_refs(valid_paths, root_path=root_path),
+        )
 
     def toggle_external_tools(self):
         if hasattr(self, 'detail_panel'):
@@ -2048,16 +3263,17 @@ class DigitalDetectiveBoard(QMainWindow):
         self.tools_integration.toggle_tools_panel()
     
     def draw_connection(self, edge):
-        if edge.source_id in self.node_widgets and edge.target_id in self.node_widgets:
-            source_widget = self.node_widgets[edge.source_id]
-            target_widget = self.node_widgets[edge.target_id]
-            
+        source_widget = self._resolve_connection_widget(edge.source_id)
+        target_widget = self._resolve_connection_widget(edge.target_id)
+        if source_widget and target_widget:
             print(f"Creating connection from {edge.source_id} to {edge.target_id}")
-            
+
             edge_item = DynamicEdge(source_widget, target_widget, edge)
+            edge_item.setZValue(self._edge_z_value(edge))
             edge_item.set_render_style(self._edge_render_style)
             self.canvas_widget.scene.addItem(edge_item)
             self.edge_items[edge.id] = edge_item
+            self._sync_edge_visibility()
     
     def on_edge_updated(self, edge):
         print(f"Updating edge: {edge.id} with label: {edge.label}")
@@ -2124,10 +3340,19 @@ class DigitalDetectiveBoard(QMainWindow):
             tracked_node.id: QPointF(tracked_node.position)
             for tracked_node in tracked_nodes
         }
+        self._begin_drag_link_session("node", node.id)
 
     def _on_node_move_finished(self, node):
         snapshot = self._active_node_move_snapshot or {}
         self._active_node_move_snapshot = None
+        state = self._drag_link_state or {}
+        if (
+            str(state.get("kind", "") or "").strip() == "node"
+            and str(state.get("item_id", "") or "").strip() == str(node.id)
+        ):
+            self._apply_drag_link_action_if_needed()
+        else:
+            self._clear_drag_link_state()
         if not snapshot:
             return
 
@@ -2150,12 +3375,34 @@ class DigitalDetectiveBoard(QMainWindow):
         self.graph_manager.save_state(description)
         self.statusBar().showMessage(description)
 
+    def _on_node_widget_position_changed(self, node_id: str):
+        if self._applying_stacker_cascade:
+            return
+
+        node = self.graph_manager.get_node(node_id)
+        if node is None:
+            return
+
+        parent_id = self._get_node_parent_stacker_id(node)
+        if parent_id:
+            self._refresh_stacker_parent_chain(parent_id)
+
+        state = self._drag_link_state or {}
+        if (
+            str(state.get("kind", "") or "").strip() == "node"
+            and str(state.get("item_id", "") or "").strip() == str(node_id or "").strip()
+        ):
+            self._update_drag_link_candidate()
+
     def _bind_node_widget_signals(self, node_widget):
         node_widget.node_updated.connect(self.on_node_selected)
         node_widget.connection_started.connect(self.start_connection)
         node_widget.duplicate_requested.connect(self.duplicate_node)
         node_widget.move_started.connect(self._on_node_move_started)
         node_widget.move_finished.connect(self._on_node_move_finished)
+        node_widget.positionChanged.connect(
+            lambda node_id=node_widget.node.id: self._on_node_widget_position_changed(node_id)
+        )
         node_widget.node_deleted.connect(self.on_node_deleted)
         node_widget.delete_selected_requested.connect(self.delete_selected_scene_items)
         node_widget.tool_run_requested.connect(self.on_tool_node_run_requested)
@@ -2302,9 +3549,13 @@ class DigitalDetectiveBoard(QMainWindow):
             self.canvas_widget.add_node_widget(node_widget)
             self._bind_node_widget_signals(node_widget)
             self.node_widgets[node.id] = node_widget
+
+        self._refresh_all_stacker_layouts()
         
         for edge in self.graph_manager.graph_data.edges.values():
             self.draw_connection(edge)
+
+        self._sync_stacker_content_visibility()
 
         self.refresh_tool_nodes()
         
@@ -2330,6 +3581,10 @@ class DigitalDetectiveBoard(QMainWindow):
         self.canvas_widget.add_node_widget(node_widget)
         self._bind_node_widget_signals(node_widget)
         self.node_widgets[node.id] = node_widget
+        parent_id = self._get_node_parent_stacker_id(node)
+        if parent_id:
+            self._refresh_stacker_parent_chain(parent_id)
+        self._sync_stacker_content_visibility()
 
         if ToolNodeService.is_tool_node(node):
             ToolNodeService.refresh_tool_node_state(self.graph_manager, node)
@@ -2432,11 +3687,48 @@ class DigitalDetectiveBoard(QMainWindow):
             return
 
         custom_command = str(node.data.get("custom_command", "") or "").strip()
+        wordlist_path = None
+        login_value = None
         if custom_command:
             command_parts = shlex.split(custom_command, posix=not sys.platform.startswith("win"))
         else:
             options = str(node.data.get("options", "") or "").strip()
-            command_parts = tool_manager.get_command_for_tool(tool_name, target, options)
+            if tool_name == "hydra":
+                login_resolution = ToolNodeService.resolve_hydra_login(self.graph_manager, node)
+                if not login_resolution.get("compatible"):
+                    if node.id in self.node_widgets:
+                        self.node_widgets[node.id].update_display()
+                    QMessageBox.warning(self, "Tool Node", login_resolution.get("reason", "Hydra requires a login source."))
+                    return
+                login_value = str(login_resolution.get("login", "") or "").strip() or None
+
+            requires_wordlist = ToolNodeService.tool_requires_wordlist(tool_name, options)
+            wordlist_resolution = ToolNodeService.resolve_wordlist(self.graph_manager, node)
+            if requires_wordlist and not wordlist_resolution.get("compatible"):
+                if node.id in self.node_widgets:
+                    self.node_widgets[node.id].update_display()
+                QMessageBox.warning(self, "Tool Node", wordlist_resolution.get("reason", "Connect a compatible Wordlists node."))
+                return
+
+            wordlist_node_id = str(wordlist_resolution.get("source_node_id", "") or "").strip()
+            if wordlist_node_id:
+                wordlist_node = self.graph_manager.get_node(wordlist_node_id)
+                if wordlist_node is None:
+                    QMessageBox.warning(self, "Tool Node", "The resolved Wordlists node no longer exists.")
+                    return
+                try:
+                    wordlist_path = WordlistService.materialize_node_to_temp(wordlist_node.id, wordlist_node.data)
+                except WordlistValidationError as exc:
+                    QMessageBox.warning(self, "Tool Node", str(exc))
+                    return
+
+            command_parts = tool_manager.get_command_for_tool(
+                tool_name,
+                target,
+                options,
+                wordlist_path=wordlist_path,
+                login_value=login_value,
+            )
 
         if not command_parts:
             QMessageBox.warning(self, "Tool Node", "Could not build a command for this tool node.")
@@ -2477,7 +3769,13 @@ class DigitalDetectiveBoard(QMainWindow):
         self.tool_run_threads[node.id] = command_thread
         command_thread.start()
 
-        self.statusBar().showMessage(f"Running {ToolNodeService.get_tool_display_name(tool_name)} against {target}")
+        status_target = target or "configured input"
+        if wordlist_path:
+            self.statusBar().showMessage(
+                f"Running {ToolNodeService.get_tool_display_name(tool_name)} against {status_target} with wordlist"
+            )
+        else:
+            self.statusBar().showMessage(f"Running {ToolNodeService.get_tool_display_name(tool_name)} against {status_target}")
 
     def _on_tool_node_output_received(self, node_id, output):
         node = self.graph_manager.get_node(node_id)
@@ -2511,18 +3809,15 @@ class DigitalDetectiveBoard(QMainWindow):
         tool_name = str(node.data.get("tool_name", "") or "").strip().lower()
         target = str(node.data.get("resolved_target", "") or node.data.get("manual_target", "")).strip()
         output_text = self.tool_output_cache.get(node_id, "")
+        exit_code = ToolNodeService.normalize_tool_exit_code(tool_name, output_text, exit_code)
+        error_result_payload = ToolNodeService.build_tool_error_result_payload(tool_name, target, output_text)
+        mapped_error = ToolNodeService.map_known_tool_error(tool_name, output_text)
 
-        if exit_code != 0 and tool_name == "tshark":
-            normalized_output = (output_text or "").lower()
-            if "dumpcap in child process: permission denied" in normalized_output or "permission denied" in normalized_output:
-                node.data["last_error"] = (
-                    "Sem permissões para captura ao vivo com TShark.\n"
-                    "Use um ficheiro .pcap/.pcapng como target, ou conceda permissões ao dumpcap "
-                    "(grupo wireshark/cap_net_raw,cap_net_admin)."
-                )
+        if mapped_error and error_result_payload:
+            node.data["last_error"] = mapped_error
 
         created_nodes = []
-        if exit_code == 0 and tool_name:
+        if exit_code == 0 and tool_name and not error_result_payload:
             try:
                 created_nodes = self.tools_integration.tools_manager.output_parser.parse_tool_output(
                     tool_name,
@@ -2548,12 +3843,16 @@ class DigitalDetectiveBoard(QMainWindow):
                     self.create_node_visual(created_node)
                     self._connect_tool_node_to_result(node, created_node)
             else:
-                if tool_name == "tshark":
+                if error_result_payload:
+                    diagnostic_node = self._create_tool_error_result_node(node, error_result_payload)
+                    if diagnostic_node:
+                        created_nodes = [diagnostic_node]
+                elif tool_name == "tshark":
                     node.data["output_summary"] = "TShark completed with no structured entities extracted."
                 else:
-                    fallback_node = self._create_tool_fallback_result_node(node, output_text, exit_code)
-                    if fallback_node:
-                        created_nodes = [fallback_node]
+                    fallback_nodes = self._create_tool_fallback_result_nodes(node, output_text, exit_code)
+                    if fallback_nodes:
+                        created_nodes = fallback_nodes
 
             node.data["last_status"] = "success"
             node.data["created_node_ids"] = [created_node.id for created_node in created_nodes]
@@ -2568,7 +3867,16 @@ class DigitalDetectiveBoard(QMainWindow):
             node.data["last_status"] = "error"
             if not node.data.get("last_error"):
                 node.data["last_error"] = f"Command finished with exit code {exit_code}"
-            node.data["output_summary"] = str(node.data.get("last_error", "") or "")
+            if error_result_payload:
+                diagnostic_node = self._create_tool_error_result_node(node, error_result_payload)
+                if diagnostic_node:
+                    created_nodes = [diagnostic_node]
+                    node.data["created_node_ids"] = [diagnostic_node.id]
+                    node.data["output_summary"] = error_result_payload.get("summary_text", str(node.data.get("last_error", "") or ""))
+                else:
+                    node.data["output_summary"] = str(node.data.get("last_error", "") or "")
+            else:
+                node.data["output_summary"] = str(node.data.get("last_error", "") or "")
             self.statusBar().showMessage(
                 f"{ToolNodeService.get_tool_display_name(tool_name)} failed: {node.data['output_summary']}"
             )
@@ -2602,12 +3910,32 @@ class DigitalDetectiveBoard(QMainWindow):
                 created_node.position.y() + delta_y,
             )
 
-    def _create_tool_fallback_result_node(self, tool_node, output_text, exit_code):
+    def _create_tool_fallback_result_nodes(self, tool_node, output_text, exit_code):
         tool_name = str(tool_node.data.get("tool_name", "") or "").strip().lower()
+        target = str(tool_node.data.get("resolved_target", "") or tool_node.data.get("manual_target", ""))
+        warning_payload = ToolNodeService.build_tool_warning_payload(
+            tool_name,
+            target,
+            output_text,
+            exit_code,
+        )
+        if warning_payload:
+            warning_node = self._create_special_tool_result_node(tool_node, warning_payload)
+            return [warning_node] if warning_node else []
+
+        result_payloads = ToolNodeService.build_tool_result_payloads(
+            tool_name,
+            target,
+            output_text,
+            exit_code,
+        )
+        if result_payloads:
+            return self._create_special_tool_result_nodes(tool_node, result_payloads)
+
         result_type = ToolNodeService.get_tool_spec(tool_name).get("result_node_type", "note")
         custom_data = ToolNodeService.build_fallback_result_data(
             tool_name,
-            str(tool_node.data.get("resolved_target", "") or tool_node.data.get("manual_target", "")),
+            target,
             output_text,
             exit_code,
         )
@@ -2615,6 +3943,77 @@ class DigitalDetectiveBoard(QMainWindow):
         node_data = NodeFactory.create_node_data(result_type, custom_data=custom_data, category=self.category)
         fallback_position = QPointF(tool_node.position.x() + 210, tool_node.position.y())
         result_node = self.graph_manager.add_node(result_type, fallback_position, node_data, save_state=False)
+        result_node.data["generated_by_tool_id"] = tool_node.id
+        self.create_node_visual(result_node)
+        self._connect_tool_node_to_result(tool_node, result_node)
+        return [result_node]
+
+    def _create_special_tool_result_nodes(self, tool_node, result_payloads):
+        created_nodes = []
+        for payload in result_payloads or []:
+            result_node = self._create_special_tool_result_node(tool_node, payload)
+            if result_node:
+                created_nodes.append(result_node)
+        return created_nodes
+
+    def _create_special_tool_result_node(self, tool_node, result_payload):
+        template = result_payload.get("template") or {}
+        node_type = str(result_payload.get("node_type", "") or "").strip()
+        if not node_type:
+            return None
+
+        NodeFactory.register_custom_node_template(
+            name=template.get("name", node_type.replace("_", " ").title()),
+            node_type=node_type,
+            color=template.get("color"),
+            default_data=template.get("default_data", {}),
+            symbol=template.get("symbol"),
+            category=template.get("category"),
+            category_label=template.get("category_label"),
+            overwrite=True,
+        )
+        NodeFactory.set_node_template_override(
+            node_type=node_type,
+            removed_fields=template.get("removed_fields", []),
+        )
+        self.sync_custom_node_templates_metadata()
+
+        node_data = NodeFactory.create_node_data(node_type, custom_data=result_payload.get("data") or {})
+        result_position = QPointF(tool_node.position.x() + 210, tool_node.position.y())
+        result_node = self.graph_manager.add_node(node_type, result_position, node_data, save_state=False)
+        result_node.data["generated_by_tool_id"] = tool_node.id
+        self.create_node_visual(result_node)
+        self._connect_tool_node_to_result(tool_node, result_node)
+        return result_node
+
+    def _create_tool_error_result_node(self, tool_node, error_payload):
+        if not error_payload:
+            return None
+
+        template = error_payload.get("template") or {}
+        node_type = str(error_payload.get("node_type", "") or "").strip()
+        if not node_type:
+            return None
+
+        NodeFactory.register_custom_node_template(
+            name=template.get("name", node_type.replace("_", " ").title()),
+            node_type=node_type,
+            color=template.get("color"),
+            default_data=template.get("default_data", {}),
+            symbol=template.get("symbol"),
+            category=template.get("category"),
+            category_label=template.get("category_label"),
+            overwrite=True,
+        )
+        NodeFactory.set_node_template_override(
+            node_type=node_type,
+            removed_fields=template.get("removed_fields", []),
+        )
+        self.sync_custom_node_templates_metadata()
+
+        node_data = NodeFactory.create_node_data(node_type, custom_data=error_payload.get("data") or {})
+        error_position = QPointF(tool_node.position.x() + 210, tool_node.position.y())
+        result_node = self.graph_manager.add_node(node_type, error_position, node_data, save_state=False)
         result_node.data["generated_by_tool_id"] = tool_node.id
         self.create_node_visual(result_node)
         self._connect_tool_node_to_result(tool_node, result_node)
@@ -2650,8 +4049,9 @@ class DigitalDetectiveBoard(QMainWindow):
             self.node_widgets[node.id].update_display()
             if hasattr(self, 'edge_items'):
                 for edge_item in self.edge_items.values():
-                    if (edge_item.source_node.node.id == node.id or 
-                        edge_item.target_node.node.id == node.id):
+                    source_id = getattr(getattr(edge_item.source_node, "node", None), "id", None) or getattr(edge_item.source_node, "stacker_id", "")
+                    target_id = getattr(getattr(edge_item.target_node, "node", None), "id", None) or getattr(edge_item.target_node, "stacker_id", "")
+                    if source_id == node.id or target_id == node.id:
                         edge_item.update_path()
 
         self.refresh_tool_nodes()
@@ -2666,6 +4066,7 @@ class DigitalDetectiveBoard(QMainWindow):
         node = self.graph_manager.get_node(node_id)
         if not node:
             return False
+        parent_stacker_id = self._get_node_parent_stacker_id(node)
 
         running_thread = self.tool_run_threads.pop(node.id, None)
         self.tool_output_cache.pop(node.id, None)
@@ -2699,6 +4100,8 @@ class DigitalDetectiveBoard(QMainWindow):
         if refresh_ui:
             self.refresh_tool_nodes()
             self.sync_custom_node_templates_metadata()
+        if parent_stacker_id:
+            self._refresh_stacker_parent_chain(parent_stacker_id)
 
         if show_status:
             self.statusBar().showMessage(f"Deleted {node.type} node and its connections")
@@ -2797,17 +4200,18 @@ class DigitalDetectiveBoard(QMainWindow):
 
     
     def start_connection(self, source_widget):
-        print(f"Starting connection from node: {source_widget.node.id}")
+        source_id = getattr(getattr(source_widget, "node", None), "id", None) or getattr(source_widget, "stacker_id", "")
+        print(f"Starting connection from item: {source_id}")
         self.connection_source = source_widget
         
         self.canvas_widget.viewport().installEventFilter(self)
-        self.statusBar().showMessage("Connection mode: Click target node or ESC to cancel")
+        self.statusBar().showMessage("Connection mode: Click target node/stacker or ESC to cancel")
     
     def create_connection(self, source_id, target_id):
         try:
             print(f"Attempting to connect {source_id} to {target_id}")
-            
-            edge = self.graph_manager.connect_nodes(source_id, target_id, "")
+
+            edge = self.graph_manager.connect_items(source_id, target_id, "")
             
             self.draw_connection(edge)
             self.refresh_tool_nodes()
@@ -2859,6 +4263,11 @@ class DigitalDetectiveBoard(QMainWindow):
             )
             self.statusBar().showMessage(f"New investigation tab created: {project_type} / {category}")
             self._update_document_tab_label(tab_index)
+            self._emit_ndc_project_event(
+                "opened",
+                graph_data=self.documents[tab_index]["graph_data"],
+                reason="new_tab",
+            )
         
         dialog.project_selected.connect(on_project_selected)
         dialog.exec()
@@ -2890,6 +4299,8 @@ class DigitalDetectiveBoard(QMainWindow):
         history_position=None,
     ):
         self._stop_all_tool_threads()
+        if hasattr(graph_data, "metadata") and isinstance(graph_data.metadata, dict):
+            self._ensure_ndc_project_id(graph_data.metadata)
         NodeFactory.load_custom_node_templates(graph_data.metadata.get('custom_node_templates', {}))
         NodeFactory.load_node_template_settings(graph_data.metadata.get('node_template_settings', {}))
         self.graph_manager.load_snapshot(
@@ -2930,6 +4341,12 @@ class DigitalDetectiveBoard(QMainWindow):
                 self.sync_custom_node_templates_metadata()
                 self._update_document_tab_label(tab_index)
                 self.statusBar().showMessage(f"Opened investigation: {filename}")
+                self._emit_ndc_project_event(
+                    "opened",
+                    graph_data=self.documents[tab_index]["graph_data"],
+                    file_path=filename,
+                    reason="open_dialog",
+                )
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to open file: {e}")
                 print(f"Error loading file: {e}")
@@ -2976,9 +4393,32 @@ class DigitalDetectiveBoard(QMainWindow):
                 self.canvas_widget.scene
             )
             if success:
+                self._emit_ndc_snapshot_event(
+                    "checkpoint_exported",
+                    graph_data=self.graph_manager.graph_data,
+                    trigger="export_png",
+                    summary="Checkpoint captured on PNG export.",
+                )
+                self._emit_ndc_tool_event(
+                    "exported",
+                    tool_name="canvas_exporter",
+                    surface="export_flow",
+                    result_summary=f"Exported investigation canvas as PNG with {len(self.canvas_widget.scene.items())} scene item(s).",
+                    result_status="success",
+                    result_count=len(self.canvas_widget.scene.items()),
+                    artifact_refs=(filename,),
+                )
                 self.statusBar().showMessage(f"Exported PNG: {filename}")
                 QMessageBox.information(self, "Export Successful", f"PNG exported successfully to:\n{filename}")
             else:
+                self._emit_ndc_tool_event(
+                    "exported",
+                    tool_name="canvas_exporter",
+                    surface="export_flow",
+                    result_summary="PNG export failed for the current investigation canvas.",
+                    result_status="failure",
+                    artifact_refs=(filename,),
+                )
                 self.statusBar().showMessage("PNG export failed")
                 QMessageBox.warning(self, "Export Failed", "Failed to export PNG. Check console for details.")
 
@@ -2997,8 +4437,30 @@ class DigitalDetectiveBoard(QMainWindow):
                 self.canvas_widget.scene
             )
             if success:
+                self._emit_ndc_snapshot_event(
+                    "checkpoint_exported",
+                    graph_data=self.graph_manager.graph_data,
+                    trigger="export_svg",
+                    summary="Checkpoint captured on SVG export.",
+                )
+                self._emit_ndc_tool_event(
+                    "exported",
+                    tool_name="canvas_exporter",
+                    surface="export_flow",
+                    result_summary="Exported investigation canvas as SVG.",
+                    result_status="success",
+                    artifact_refs=(filename,),
+                )
                 self.statusBar().showMessage(f"Exported SVG: {filename}")
             else:
+                self._emit_ndc_tool_event(
+                    "exported",
+                    tool_name="canvas_exporter",
+                    surface="export_flow",
+                    result_summary="SVG export failed for the current investigation canvas.",
+                    result_status="failure",
+                    artifact_refs=(filename,),
+                )
                 self.statusBar().showMessage("SVG export failed")
 
     def export_json(self):
@@ -3015,8 +4477,30 @@ class DigitalDetectiveBoard(QMainWindow):
                 self.graph_manager.graph_data, filename
             )
             if success:
+                self._emit_ndc_snapshot_event(
+                    "checkpoint_exported",
+                    graph_data=self.graph_manager.graph_data,
+                    trigger="export_json",
+                    summary="Checkpoint captured on JSON export.",
+                )
+                self._emit_ndc_tool_event(
+                    "exported",
+                    tool_name="canvas_exporter",
+                    surface="export_flow",
+                    result_summary="Exported investigation graph as JSON.",
+                    result_status="success",
+                    artifact_refs=(filename,),
+                )
                 self.statusBar().showMessage(f"Exported JSON: {filename}")
             else:
+                self._emit_ndc_tool_event(
+                    "exported",
+                    tool_name="canvas_exporter",
+                    surface="export_flow",
+                    result_summary="JSON export failed for the current investigation graph.",
+                    result_status="failure",
+                    artifact_refs=(filename,),
+                )
                 self.statusBar().showMessage("JSON export failed")
     
     def apply_theme(self, theme_name):
@@ -3114,6 +4598,20 @@ class DigitalDetectiveBoard(QMainWindow):
                 event.ignore()
                 return
         self._stop_all_tool_threads()
+        self.ndc_snapshot_timer.stop()
+        for document in self.documents:
+            self._emit_ndc_snapshot_event(
+                "checkpoint_closed",
+                graph_data=document.get("graph_data"),
+                trigger="app_exit",
+                summary="Checkpoint captured during application shutdown.",
+            )
+            self._emit_ndc_project_event(
+                "closed",
+                graph_data=document.get("graph_data"),
+                file_path=document.get("file_path"),
+                reason="app_exit",
+            )
         event.accept()
 
     def changeEvent(self, event):
@@ -3187,10 +4685,12 @@ class DigitalDetectiveBoard(QMainWindow):
             items = self.canvas_widget.items(event.pos())
             print(f"Found {len(items)} items at click position")
             
+            source_id = getattr(getattr(self.connection_source, "node", None), "id", None) or getattr(self.connection_source, "stacker_id", "")
             for item in items:
-                if isinstance(item, NodeWidget) and item != self.connection_source:
-                    print(f"Target node found: {item.node.id}")
-                    self.create_connection(self.connection_source.node.id, item.node.id)
+                target_id = getattr(getattr(item, "node", None), "id", None) or getattr(item, "stacker_id", "")
+                if isinstance(item, (NodeWidget, StackerItem)) and item != self.connection_source and target_id:
+                    print(f"Target item found: {target_id}")
+                    self.create_connection(source_id, target_id)
                     
                     self.connection_source = None
                     self.canvas_widget.viewport().removeEventFilter(self)

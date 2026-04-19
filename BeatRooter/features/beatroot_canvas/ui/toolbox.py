@@ -264,21 +264,21 @@ class ToolboxWidget(QWidget):
         self.beatnote_content_frame.setStyleSheet(
             """
             QFrame#BeatNoteFloatingPreview {
-                background: rgba(5, 10, 18, 246);
-                border: 1px solid rgba(56, 83, 124, 120);
+                background: rgba(41, 41, 41, 246);
+                border: 1px solid rgba(164, 103, 131, 210);
                 border-radius: 12px;
             }
             QLabel#BeatNoteFloatingTitle {
-                color: #d7e5fb;
+                color: #efefef;
                 font-size: 11px;
                 font-weight: 700;
             }
             QTextEdit#BeatNoteFloatingBody {
                 background: transparent;
                 border: none;
-                color: #d2e1fb;
+                color: #d8d8d8;
                 font-size: 10px;
-                selection-background-color: rgba(66, 110, 190, 180);
+                selection-background-color: #3a3a3a;
             }
             """
         )
@@ -349,9 +349,9 @@ class ToolboxWidget(QWidget):
                 max-width: 58px;
                 min-height: 58px;
                 max-height: 58px;
-                background: rgba(15, 25, 40, 242);
-                color: #dbe7ff;
-                border: 1px solid rgba(81, 108, 154, 145);
+                background: rgba(35, 35, 35, 242);
+                color: #e6e6e6;
+                border: 1px solid #3d3d3d;
                 border-radius: 20px;
                 font-size: 20px;
                 font-weight: 700;
@@ -366,51 +366,46 @@ class ToolboxWidget(QWidget):
                 qproperty-toolButtonStyle: ToolButtonTextOnly;
             }
             QToolButton#RailPrimaryButton {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 1,
-                    stop: 0 #3478ff,
-                    stop: 1 #1e47cf
-                );
-                border: 1px solid rgba(118, 157, 255, 235);
+                background: rgba(200, 85, 138, 255);
+                color: #fff7fb;
+                border: 1px solid #e28db3;
             }
             QToolButton[railButton="true"]:hover {
-                background: rgba(24, 39, 61, 250);
-                border: 1px solid rgba(113, 146, 201, 220);
-                color: #ffffff;
+                background: rgba(56, 45, 52, 250);
+                border: 1px solid #7a5567;
+                color: #fff0f6;
             }
             QToolButton#RailPrimaryButton:hover {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 1,
-                    stop: 0 #4e8cff,
-                    stop: 1 #2758ea
-                );
+                background: rgba(215, 102, 153, 255);
+                border: 1px solid #efb1cb;
+                color: #ffffff;
             }
             QToolButton#BeatNoteRailButton {
                 font-size: 16px;
             }
             QToolButton[railButton="true"]:pressed {
-                background: rgba(33, 53, 82, 255);
+                background: rgba(53, 53, 53, 255);
             }
             QFrame#FloatingToolboxDrawer {
-                background: rgba(8, 13, 22, 240);
-                border: 1px solid rgba(83, 109, 153, 158);
+                background: rgba(35, 35, 35, 240);
+                border: 1px solid #3d3d3d;
                 border-radius: 24px;
             }
             QLabel#ToolboxEyebrow {
-                color: #7d9ad1;
+                color: #8fd284;
                 font-size: 9px;
                 font-weight: 700;
                 letter-spacing: 1px;
             }
             QLabel#ToolboxTitle {
-                color: #f5f8ff;
+                color: #f0f0f0;
                 font-size: 17px;
                 font-weight: 700;
             }
             QLabel#NodeCountBadge {
-                background: rgba(23, 39, 67, 235);
-                color: #eff5ff;
-                border: 1px solid rgba(94, 127, 182, 194);
+                background: rgba(61, 44, 53, 235);
+                color: #ffe6f0;
+                border: 1px solid rgba(164, 103, 131, 220);
                 border-radius: 11px;
                 padding: 5px 8px;
                 font-size: 10px;
@@ -422,29 +417,30 @@ class ToolboxWidget(QWidget):
                 max-width: 24px;
                 min-height: 24px;
                 max-height: 24px;
-                border: 1px solid rgba(82, 106, 144, 158);
+                border: 1px solid #3d3d3d;
                 border-radius: 12px;
-                background: rgba(16, 26, 43, 240);
-                color: #cfe0ff;
+                background: rgba(41, 41, 41, 240);
+                color: #d6d6d6;
                 font-size: 14px;
                 font-weight: 700;
             }
             QToolButton#DrawerCloseButton:hover {
-                background: rgba(29, 46, 72, 255);
+                background: rgba(56, 45, 52, 255);
+                border: 1px solid #7a5567;
                 color: #ffffff;
             }
             QLineEdit#ToolboxSearchInput,
             QComboBox#ToolboxFilterCombo {
-                background: rgba(14, 22, 36, 247);
-                color: #f2f6ff;
-                border: 1px solid rgba(71, 92, 128, 145);
+                background: rgba(41, 41, 41, 247);
+                color: #efefef;
+                border: 1px solid #3d3d3d;
                 border-radius: 12px;
                 padding: 7px 10px;
-                selection-background-color: #436fcb;
+                selection-background-color: #3a3a3a;
             }
             QLineEdit#ToolboxSearchInput:focus,
             QComboBox#ToolboxFilterCombo:focus {
-                border: 1px solid rgba(108, 146, 224, 242);
+                border: 1px solid #a76885;
             }
             QComboBox#ToolboxFilterCombo::drop-down {
                 border: none;
@@ -456,14 +452,14 @@ class ToolboxWidget(QWidget):
                 height: 0px;
                 border-left: 4px solid transparent;
                 border-right: 4px solid transparent;
-                border-top: 5px solid #90abd9;
+                border-top: 5px solid #b8b8b8;
                 margin-right: 7px;
             }
             QComboBox#ToolboxFilterCombo QAbstractItemView {
-                background: #0d1524;
-                color: #ebf2ff;
-                border: 1px solid rgba(81, 104, 145, 219);
-                selection-background-color: #27426e;
+                background: #292929;
+                color: #efefef;
+                border: 1px solid #3d3d3d;
+                selection-background-color: #3a3a3a;
             }
             QPushButton#ToolboxGhostButton,
             QPushButton#CustomNodeBtn,
@@ -475,83 +471,69 @@ class ToolboxWidget(QWidget):
                 padding: 7px 10px;
             }
             QPushButton#ToolboxGhostButton {
-                background: rgba(15, 23, 36, 242);
-                color: #d7e5fb;
-                border: 1px solid rgba(73, 96, 132, 153);
+                background: rgba(41, 41, 41, 242);
+                color: #e2e2e2;
+                border: 1px solid #3d3d3d;
             }
             QPushButton#ToolboxGhostButton:hover {
-                background: rgba(26, 39, 59, 255);
-                border: 1px solid rgba(113, 146, 201, 214);
+                background: rgba(56, 45, 52, 255);
+                border: 1px solid #7a5567;
                 color: #ffffff;
             }
             QPushButton#CustomNodeBtn {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #2458cf,
-                    stop: 1 #1b3da4
-                );
-                color: #f6fbff;
-                border: 1px solid rgba(102, 137, 213, 189);
+                background: rgba(200, 85, 138, 255);
+                color: #fff7fb;
+                border: 1px solid #e28db3;
             }
             QPushButton#CustomNodeBtn:hover {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #2f69ef,
-                    stop: 1 #224cc8
-                );
+                background: rgba(215, 102, 153, 255);
+                border: 1px solid #efb1cb;
             }
             QFrame#BeatNoteQuickSection {
-                background: rgba(11, 18, 29, 235);
+                background: rgba(35, 35, 35, 235);
                 border: none;
                 border-radius: 0px;
             }
             QLabel#BeatNoteQuickEyebrow {
-                color: #74b4ff;
+                color: #8fd284;
                 font-size: 9px;
                 font-weight: 700;
                 letter-spacing: 1px;
             }
             QLabel#BeatNoteQuickTitle {
-                color: #f4f8ff;
+                color: #f0f0f0;
                 font-size: 13px;
                 font-weight: 700;
             }
             QPushButton#BeatNoteQuickOpenButton {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #2458cf,
-                    stop: 1 #1b3da4
-                );
-                color: #f6fbff;
-                border: 1px solid rgba(102, 137, 213, 189);
+                background: rgba(200, 85, 138, 255);
+                color: #fff7fb;
+                border: 1px solid #e28db3;
             }
             QPushButton#BeatNoteQuickOpenButton:hover {
-                background: qlineargradient(
-                    x1: 0, y1: 0, x2: 1, y2: 0,
-                    stop: 0 #2f69ef,
-                    stop: 1 #224cc8
-                );
+                background: rgba(215, 102, 153, 255);
+                border: 1px solid #efb1cb;
             }
             QFrame#BeatNotePreviewCard {
-                background: rgba(14, 22, 34, 110);
-                border: 1px solid rgba(48, 73, 109, 62);
+                background: rgba(41, 41, 41, 110);
+                border: 1px solid rgba(61, 61, 61, 150);
                 border-radius: 10px;
             }
             QLabel#BeatNoteQuickContentTitle {
-                color: #b8c9e8;
+                color: #d0d0d0;
                 font-size: 10px;
                 font-weight: 600;
             }
             QTextEdit#BeatNoteQuickContentBody {
                 background: transparent;
                 border: none;
-                color: #cedcf5;
+                color: #d8d8d8;
                 font-size: 10px;
                 line-height: 1.35;
-                selection-background-color: rgba(66, 110, 190, 180);
+                selection-background-color: #3a3a3a;
             }
             QLabel#BeatNoteQuickEmptyLabel {
-                color: #8ea2c5;
+                color: #9b9b9b;
                 font-size: 10px;
                 padding: 4px 2px 2px 2px;
             }
@@ -559,7 +541,7 @@ class ToolboxWidget(QWidget):
                 show-decoration-selected: 0;
                 background: transparent;
                 border: none;
-                color: #dce8ff;
+                color: #e0e0e0;
                 font-size: 10px;
                 outline: none;
             }
@@ -567,16 +549,16 @@ class ToolboxWidget(QWidget):
                 min-height: 24px;
                 padding: 2px 4px;
                 selection-background-color: transparent;
-                selection-color: #dce8ff;
+                selection-color: #e0e0e0;
             }
             QTreeWidget#BeatNoteQuickTree::item:selected {
                 background: transparent;
-                color: #dce8ff;
+                color: #e0e0e0;
             }
             QTreeWidget#BeatNoteQuickTree::item:selected:active,
             QTreeWidget#BeatNoteQuickTree::item:selected:!active {
                 background: transparent;
-                color: #dce8ff;
+                color: #e0e0e0;
             }
             QTreeWidget#BeatNoteQuickTree::branch:selected {
                 background: transparent;
@@ -591,52 +573,52 @@ class ToolboxWidget(QWidget):
                 border: none;
             }
             QGroupBox[toolSectionGroup="true"] {
-                background: rgba(12, 19, 31, 210);
-                border: 1px solid rgba(58, 77, 107, 130);
+                background: rgba(35, 35, 35, 210);
+                border: 1px solid #3d3d3d;
                 border-radius: 18px;
                 margin-top: 14px;
                 padding-top: 12px;
             }
             QGroupBox[featuredSection="true"] {
-                border: 1px solid rgba(92, 122, 180, 194);
+                border: 1px solid rgba(164, 103, 131, 220);
             }
             QGroupBox[toolSectionGroup="true"]::title {
                 subcontrol-origin: margin;
                 left: 14px;
                 padding: 0 6px;
-                color: #eaf1ff;
-                background: #0d1524;
+                color: #f0f0f0;
+                background: #232323;
                 font-size: 10px;
                 font-weight: 700;
             }
             QFrame[sectionHeader="true"] {
-                background: rgba(17, 27, 42, 224);
-                border: 1px solid rgba(60, 79, 108, 125);
+                background: rgba(41, 41, 41, 224);
+                border: 1px solid #3d3d3d;
                 border-radius: 12px;
             }
             QFrame[sectionHeader="true"]:hover {
-                background: rgba(27, 42, 64, 245);
-                border: 1px solid rgba(103, 133, 188, 194);
+                background: rgba(56, 45, 52, 245);
+                border: 1px solid rgba(164, 103, 131, 220);
             }
             QLabel[categoryArrow="true"] {
-                color: #73a4ff;
+                color: #8fd284;
                 font-size: 10px;
                 font-weight: 700;
             }
             QLabel[categoryTitle="true"] {
-                color: #d8e4fb;
+                color: #e0e0e0;
                 font-size: 10px;
                 font-weight: 600;
             }
             QLabel[categoryCount="true"] {
-                color: #7e96bb;
+                color: #9b9b9b;
                 font-size: 9px;
             }
             QPushButton[toolItem="true"] {
-                background: rgba(13, 20, 31, 240);
-                color: #dce8ff;
-                border: 1px solid rgba(48, 67, 95, 145);
-                border-left: 3px solid #4f84ff;
+                background: rgba(41, 41, 41, 240);
+                color: #e0e0e0;
+                border: 1px solid #3d3d3d;
+                border-left: 3px solid #6a6a6a;
                 border-radius: 11px;
                 padding: 7px 10px;
                 font-size: 10px;
@@ -644,27 +626,27 @@ class ToolboxWidget(QWidget):
                 text-align: left;
             }
             QPushButton[toolItem="true"]:hover {
-                background: rgba(24, 37, 57, 252);
-                border: 1px solid rgba(101, 132, 186, 224);
+                background: rgba(56, 45, 52, 252);
+                border: 1px solid rgba(164, 103, 131, 220);
                 color: #ffffff;
             }
             QLabel#EmptyStateLabel {
-                color: #8094b5;
+                color: #989898;
                 font-style: italic;
                 padding: 10px 6px;
             }
             QScrollBar:vertical {
-                background: rgba(10, 16, 26, 230);
+                background: rgba(35, 35, 35, 230);
                 width: 9px;
                 border-radius: 4px;
             }
             QScrollBar::handle:vertical {
-                background: rgba(58, 83, 120, 240);
+                background: rgba(107, 83, 96, 240);
                 border-radius: 4px;
                 min-height: 24px;
             }
             QScrollBar::handle:vertical:hover {
-                background: rgba(86, 121, 176, 255);
+                background: rgba(135, 102, 118, 255);
             }
             QScrollBar::add-line:vertical,
             QScrollBar::sub-line:vertical {

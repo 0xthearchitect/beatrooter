@@ -172,6 +172,36 @@ class GraphManager:
         if save_state:
             self.save_state("Connect nodes")
         return edge
+
+    def connect_items(
+        self,
+        source_id: str,
+        target_id: str,
+        label: str = "",
+        edge_type: str = "connection",
+        save_state: bool = True,
+    ) -> Edge:
+        source_is_node = source_id in self.graph_data.nodes
+        target_is_node = target_id in self.graph_data.nodes
+
+        if not source_is_node and not target_is_node:
+            pass
+        elif not source_is_node or not target_is_node:
+            pass
+
+        edge_id = f"edge_{self.edge_counter}"
+        edge = Edge(edge_id, source_id, target_id, label, edge_type)
+        self.graph_data.edges[edge_id] = edge
+
+        if source_is_node:
+            self.graph_data.nodes[source_id].add_connection(edge_id)
+        if target_is_node:
+            self.graph_data.nodes[target_id].add_connection(edge_id)
+
+        self.edge_counter += 1
+        if save_state:
+            self.save_state("Connect items")
+        return edge
     
     def update_edge(self, edge_id: str, save_state: bool = True, **kwargs):
         if edge_id in self.graph_data.edges:

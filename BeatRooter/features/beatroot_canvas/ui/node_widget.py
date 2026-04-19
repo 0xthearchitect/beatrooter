@@ -101,12 +101,12 @@ class NodeWidget(QGraphicsObject):
         self.tool_pointer_height = 4.0
 
         self.cyber_colors = {
-            "panel_bg": QColor(16, 24, 36),
-            "panel_border": QColor(45, 62, 84),
+            "panel_bg": QColor("#232323"),
+            "panel_border": QColor("#3d3d3d"),
             "text_primary": QColor(189, 203, 222),
             "text_secondary": QColor(125, 141, 165),
             "warning": QColor(216, 141, 108),
-            "selection": QColor(108, 154, 220),
+            "selection": QColor("#3d3d3d"),
         }
 
         self.width = float(self.compact_size)
@@ -115,6 +115,7 @@ class NodeWidget(QGraphicsObject):
         self._cached_content_lines = []
         self._cached_header_text = ""
         self._truncated_indicator_rect = QRectF()
+        self._output_details_hovered = False
         self._output_preview_rect = QRectF()
         self._resizing_preview = False
         self._preview_resize_start_scene_pos = QPointF()
@@ -373,7 +374,9 @@ class NodeWidget(QGraphicsObject):
         self.draw_tool_controls(painter, accent_color)
 
         if self.isSelected():
-            selection_pen = QPen(self.cyber_colors["selection"], 1.2)
+            selection_color = QColor(accent_color)
+            selection_color.setAlpha(220)
+            selection_pen = QPen(selection_color, 1.2)
             selection_pen.setStyle(Qt.PenStyle.SolidLine)
             painter.setPen(selection_pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -393,11 +396,6 @@ class NodeWidget(QGraphicsObject):
         painter.setBrush(QBrush(self.cyber_colors["panel_bg"]))
         painter.setPen(QPen(border_color, 1.25))
         painter.drawRoundedRect(card_rect, self.compact_corner_radius, self.compact_corner_radius)
-
-        glow = QColor(accent_color)
-        glow.setAlpha(120)
-        painter.setPen(QPen(glow, 1.0))
-        painter.drawRoundedRect(card_rect.adjusted(2, 2, -2, -2), self.compact_corner_radius - 2, self.compact_corner_radius - 2)
 
         if self.is_tool_node():
             self.draw_tool_compact_content(painter, card_rect, accent_color)
@@ -463,7 +461,7 @@ class NodeWidget(QGraphicsObject):
         border_color = self.cyber_colors["panel_border"]
         accent_line_color = QColor(accent_color)
 
-        painter.setBrush(QBrush(QColor(13, 21, 32)))
+        painter.setBrush(QBrush(self.cyber_colors["panel_bg"]))
         painter.setPen(QPen(border_color, 1.25))
         painter.drawRoundedRect(outer_rect, 12, 12)
 
@@ -596,19 +594,32 @@ class NodeWidget(QGraphicsObject):
         ellipsis_x = float(output_rect.left() + self.padding)
         ellipsis_y = float(output_rect.bottom() - self.padding - 2)
 
+        marker_rect = QRectF(ellipsis_x - 4, ellipsis_y - self.line_height + 1, 38, self.line_height + 6)
+
+        def draw_details_marker(base_color, hover=False):
+            if hover:
+                painter.setPen(QPen(QColor(255, 242, 214), 1.4))
+                painter.setFont(QFont("Consolas", 10, QFont.Weight.Bold))
+                painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, "...")
+                return
+
+            painter.setPen(QPen(base_color))
+            painter.setFont(QFont("Consolas", 9, QFont.Weight.Normal))
+            painter.drawText(marker_rect.adjusted(6, 0, -6, 0), Qt.AlignmentFlag.AlignCenter, "...")
+
         for i, line in enumerate(content_lines):
             y_pos = start_y + (i * self.line_height)
             if line == self.MORE_MARKER:
-                painter.setPen(QPen(self.cyber_colors["warning"]))
-                painter.drawText(int(ellipsis_x), int(y_pos), "...")
-                self._truncated_indicator_rect = QRectF(ellipsis_x - 2, y_pos - self.line_height + 2, 28, self.line_height + 4)
+                marker_rect.moveTop(y_pos - self.line_height + 1)
+                draw_details_marker(self.cyber_colors["warning"], self._output_details_hovered)
+                self._truncated_indicator_rect = QRectF(marker_rect)
                 ellipsis_drawn = True
                 break
 
             if i >= max_lines:
-                painter.setPen(QPen(self.cyber_colors["warning"]))
-                painter.drawText(int(ellipsis_x), int(y_pos), "...")
-                self._truncated_indicator_rect = QRectF(ellipsis_x - 2, y_pos - self.line_height + 2, 28, self.line_height + 4)
+                marker_rect.moveTop(y_pos - self.line_height + 1)
+                draw_details_marker(self.cyber_colors["warning"], self._output_details_hovered)
+                self._truncated_indicator_rect = QRectF(marker_rect)
                 ellipsis_drawn = True
                 break
 
@@ -623,9 +634,9 @@ class NodeWidget(QGraphicsObject):
 
         # Always show clickable output details marker in expanded nodes.
         if not ellipsis_drawn:
-            painter.setPen(QPen(self.cyber_colors["warning"]))
-            painter.drawText(int(ellipsis_x), int(ellipsis_y), "...")
-            self._truncated_indicator_rect = QRectF(ellipsis_x - 2, ellipsis_y - self.line_height + 2, 28, self.line_height + 4)
+            marker_rect.moveTop(ellipsis_y - self.line_height + 1)
+            draw_details_marker(self.cyber_colors["warning"], self._output_details_hovered)
+            self._truncated_indicator_rect = QRectF(marker_rect)
 
     def _expanded_outer_rect(self):
         return QRectF(-self.width / 2, -self.height / 2, self.width, self.height)
@@ -845,6 +856,8 @@ class NodeWidget(QGraphicsObject):
     def get_all_possible_fields(self):
         if self.is_tool_node():
             return self._get_tool_display_lines()
+        if ToolNodeService.is_special_tool_result_node(self.node):
+            return self._get_special_tool_error_lines()
 
         lines = []
         added_fields = set()
@@ -893,6 +906,15 @@ class NodeWidget(QGraphicsObject):
             add_field("tools_installed", "Tools Installed")
             add_field("network_setup", "Network Setup")
             add_field("isolation_level", "Isolation Level")
+        elif self.node.type == "port_service":
+            add_field("host", "Host")
+            add_field("ip_address", "IP")
+            add_field("hostname", "Hostname")
+            add_field("port", "Port")
+            add_field("service", "Service")
+            add_field("protocol", "Protocol")
+            add_field("version", "Version")
+            add_field("state", "State")
         elif self.node.type == "malware_sample":
             add_field("sample_name", "Sample Name")
             add_field("file_type", "File Type")
@@ -905,6 +927,14 @@ class NodeWidget(QGraphicsObject):
             add_field("registry_modifications", "Registry Modifications")
             add_field("persistence_mechanism", "Persistence Mechanism")
             add_field("anti_analysis_techniques", "Anti Analysis Techniques")
+        elif self.node.type == "wordlists":
+            add_field("name", "Name")
+            add_field("wordlist_kind", "Kind")
+            add_field("source_mode", "Source")
+            add_field("source_label", "Label")
+            add_field("entry_count", "Entries")
+            add_field("preview_entries", "Preview")
+            added_fields.update({"content", "source_path", "source_url", "source_note_id", "validation_message"})
 
         for key, value in self.node.data.items():
             if (
@@ -922,6 +952,10 @@ class NodeWidget(QGraphicsObject):
             lines.append(f"{self.get_node_display_name().upper()} Node")
 
         return lines
+
+    def _get_special_tool_error_lines(self):
+        lines = ToolNodeService.get_special_node_preview_lines(self.node, self.node.data)
+        return lines or [f"{self.get_node_display_name().upper()}"]
 
     def _format_display_value(self, value, format_str="{}"):
         if isinstance(value, (list, tuple, set)):
@@ -1045,6 +1079,7 @@ class NodeWidget(QGraphicsObject):
         lines = []
         target = str(self.node.data.get("resolved_target", "") or self.node.data.get("manual_target", "")).strip()
         source_label = str(self.node.data.get("target_source_label", "") or "").strip()
+        wordlist_name = str(self.node.data.get("resolved_wordlist_name", "") or "").strip()
         status = str(self.node.data.get("last_status", "idle") or "idle").strip().upper()
         summary = str(self.node.data.get("output_summary", "") or "").strip()
         reason = str(self.node.data.get("compatibility_reason", "") or "").strip()
@@ -1059,6 +1094,9 @@ class NodeWidget(QGraphicsObject):
 
         if source_label:
             lines.append(f"Source: {source_label}")
+
+        if wordlist_name:
+            lines.append(f"Wordlist: {wordlist_name}")
 
         if summary:
             lines.append(f"Result: {summary}")
@@ -1095,9 +1133,9 @@ class NodeWidget(QGraphicsObject):
         menu.setStyleSheet(
             """
             QMenu {
-                background-color: #141f31;
-                color: #d4deec;
-                border: 1px solid #2c3b52;
+                background-color: #292929;
+                color: #e6e6e6;
+                border: 1px solid #3d3d3d;
                 font-family: 'Consolas';
                 font-size: 10px;
             }
@@ -1106,12 +1144,12 @@ class NodeWidget(QGraphicsObject):
                 background-color: transparent;
             }
             QMenu::item:selected {
-                background-color: #2a3b56;
+                background-color: #313131;
                 color: #ffffff;
             }
             QMenu::separator {
                 height: 1px;
-                background: #2c3b52;
+                background: #3d3d3d;
             }
             """
         )
@@ -1231,13 +1269,25 @@ class NodeWidget(QGraphicsObject):
     def hoverMoveEvent(self, event):
         if self._can_resize_preview() and self._is_on_preview_resize_handle(event.pos()):
             self.setCursor(Qt.CursorShape.SizeFDiagCursor)
+            self._output_details_hovered = False
+        elif not self._truncated_indicator_rect.isNull() and self._truncated_indicator_rect.contains(event.pos()):
+            self.setCursor(Qt.CursorShape.PointingHandCursor)
+            if not self._output_details_hovered:
+                self._output_details_hovered = True
+                self.update()
         elif not self._resizing_preview:
             self.setCursor(Qt.CursorShape.ArrowCursor)
+            if self._output_details_hovered:
+                self._output_details_hovered = False
+                self.update()
         super().hoverMoveEvent(event)
 
     def hoverLeaveEvent(self, event):
         if not self._resizing_preview:
             self.setCursor(Qt.CursorShape.ArrowCursor)
+        if self._output_details_hovered:
+            self._output_details_hovered = False
+            self.update()
         super().hoverLeaveEvent(event)
 
     def delete_node(self):
@@ -1246,8 +1296,8 @@ class NodeWidget(QGraphicsObject):
     def itemChange(self, change, value):
         if getattr(self, "_resizing_preview", False) and change == QGraphicsObject.GraphicsItemChange.ItemPositionChange:
             return self.pos()
-        if change == QGraphicsObject.GraphicsItemChange.ItemPositionChange and self.scene():
-            self.node.position = value
+        if change == QGraphicsObject.GraphicsItemChange.ItemPositionHasChanged and self.scene():
+            self.node.position = QPointF(self.pos())
             self.positionChanged.emit()
         return super().itemChange(change, value)
 

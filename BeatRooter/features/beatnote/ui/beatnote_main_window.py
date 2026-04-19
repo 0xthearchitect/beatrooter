@@ -6,6 +6,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from PyQt6.QtWidgets import QFileDialog, QMainWindow, QMessageBox, QStatusBar, QToolBar, QVBoxLayout, QWidget
 
+from features.beatnote.core.beatnote_service import BeatNoteService
 from features.beatnote.ui.beatnote_panel import BeatNotePanel
 from ui.theme import get_welcome_palette
 from utils.path_utils import get_resource_path
@@ -14,11 +15,19 @@ from utils.path_utils import get_resource_path
 class BeatNoteMainWindow(QMainWindow):
     _window_refs: list["BeatNoteMainWindow"] = []
 
-    def __init__(self, parent=None, *, on_back_to_welcome=None) -> None:
+    def __init__(self, parent=None, *, service: BeatNoteService | None = None, on_back_to_welcome=None) -> None:
         super().__init__(parent)
         BeatNoteMainWindow._window_refs.append(self)
         self.colors = get_welcome_palette()
         self.beatnote_panel: BeatNotePanel | None = None
+        self.service = service or BeatNoteService(
+            ndc_context_provider=lambda: {
+                "project_id": "beatnote-standalone",
+                "note_scope": "standalone",
+                "source_ref": "beatnote_main_window",
+                "format": "html",
+            }
+        )
         self.on_back_to_welcome = on_back_to_welcome
         self._welcome_restored = False
         self._setup_ui()
@@ -26,18 +35,22 @@ class BeatNoteMainWindow(QMainWindow):
         self._refresh_status()
 
     @classmethod
-    def launch(cls, parent=None, *, on_back_to_welcome=None) -> "BeatNoteMainWindow":
+    def launch(cls, parent=None, *, service: BeatNoteService | None = None, on_back_to_welcome=None) -> "BeatNoteMainWindow":
         for window in list(cls._window_refs):
             if window is None:
                 continue
             if window.isVisible():
+                if service is not None:
+                    window.service = service
+                    if window.beatnote_panel is not None:
+                        window.beatnote_panel.service = service
                 if on_back_to_welcome is not None:
                     window.on_back_to_welcome = on_back_to_welcome
                 window.raise_()
                 window.activateWindow()
                 return window
 
-        window = cls(parent=parent, on_back_to_welcome=on_back_to_welcome)
+        window = cls(parent=parent, service=service, on_back_to_welcome=on_back_to_welcome)
         window.show()
         window.raise_()
         window.activateWindow()
@@ -103,7 +116,7 @@ class BeatNoteMainWindow(QMainWindow):
         layout.setContentsMargins(22, 22, 22, 22)
         layout.setSpacing(0)
 
-        self.beatnote_panel = BeatNotePanel(colors=self.colors, parent=self)
+        self.beatnote_panel = BeatNotePanel(service=self.service, colors=self.colors, parent=self)
         self.beatnote_panel.notes_changed.connect(self._refresh_status)
         self.beatnote_panel.search_input.textChanged.connect(self._refresh_status)
         self.beatnote_panel.category_filter.currentIndexChanged.connect(self._refresh_status)

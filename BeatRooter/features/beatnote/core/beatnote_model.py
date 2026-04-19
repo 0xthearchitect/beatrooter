@@ -50,6 +50,7 @@ LEGACY_BEATNOTE_CATEGORY_MAP: dict[str, BeatNoteCategory] = {
 
 BEATNOTE_STORAGE_KEY = "beatrooter.beatnotes.v1"
 BEATNOTE_CATEGORY_STORAGE_KEY = "beatrooter.beatnote_categories.v1"
+BEATNOTE_CONTEXT_STORAGE_KEY = "beatrooter.beatnote_context.v1"
 BEATNOTE_TITLE_MAX_LENGTH = 120
 BEATNOTE_CONTENT_MAX_LENGTH = 5000
 BEATNOTE_TAG_MAX_LENGTH = 32

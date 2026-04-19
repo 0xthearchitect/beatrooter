@@ -1,50 +1,44 @@
+import math
 from PyQt6.QtWidgets import QGraphicsPathItem, QMenu, QGraphicsSimpleTextItem, QApplication
 from PyQt6.QtCore import QPointF, QRectF, Qt
-from PyQt6.QtGui import QPainterPath, QPen, QColor, QPainter, QAction, QBrush, QFont
+from PyQt6.QtGui import QPainterPath, QPen, QColor, QPainter, QAction, QBrush, QFont, QPolygonF
 
 class DynamicEdge(QGraphicsPathItem):
     EDGE_RENDER_STYLES = {
+        "signal_flow": {
+            "label": "Signal Flow",
+            "pen_style": Qt.PenStyle.SolidLine,
+            "dash_pattern": None,
+            "line_width": 2.15,
+            "glow_width": 4.8,
+        },
         "classic_dashed": {
             "label": "Classic Dashed",
             "pen_style": Qt.PenStyle.DashLine,
-            "dash_pattern": [4.5, 3.0],
-            "line_width": 2.35,
-            "glow_width": 5.8,
+            "dash_pattern": [5.0, 3.0],
+            "line_width": 2.1,
+            "glow_width": 4.8,
         },
-        "compact_dashed": {
-            "label": "Compact Dashed",
-            "pen_style": Qt.PenStyle.DashLine,
-            "dash_pattern": [3.0, 2.1],
-            "line_width": 2.2,
-            "glow_width": 5.4,
-        },
-        "bold_dashed": {
-            "label": "Bold Dashed",
-            "pen_style": Qt.PenStyle.DashLine,
-            "dash_pattern": [6.5, 3.2],
-            "line_width": 2.55,
-            "glow_width": 6.15,
-        },
-        "dotted": {
-            "label": "Dotted",
-            "pen_style": Qt.PenStyle.DotLine,
-            "dash_pattern": None,
-            "line_width": 2.15,
-            "glow_width": 5.4,
-        },
-        "dash_dot": {
-            "label": "Dash Dot",
-            "pen_style": Qt.PenStyle.DashDotLine,
-            "dash_pattern": [6.0, 2.8, 1.6, 2.8],
-            "line_width": 2.3,
-            "glow_width": 5.9,
-        },
-        "solid": {
-            "label": "Solid",
+        "soft_link": {
+            "label": "Soft Link",
             "pen_style": Qt.PenStyle.SolidLine,
             "dash_pattern": None,
-            "line_width": 2.45,
-            "glow_width": 6.0,
+            "line_width": 1.8,
+            "glow_width": 4.0,
+        },
+        "soft_dashed": {
+            "label": "Soft Dashed",
+            "pen_style": Qt.PenStyle.DashLine,
+            "dash_pattern": [3.4, 2.4],
+            "line_width": 1.85,
+            "glow_width": 4.1,
+        },
+        "accent_arc": {
+            "label": "Accent Arc",
+            "pen_style": Qt.PenStyle.SolidLine,
+            "dash_pattern": None,
+            "line_width": 2.35,
+            "glow_width": 5.2,
         },
     }
 
@@ -59,10 +53,10 @@ class DynamicEdge(QGraphicsPathItem):
         self.setFlag(QGraphicsPathItem.GraphicsItemFlag.ItemIsSelectable, True)
         self.setFlag(QGraphicsPathItem.GraphicsItemFlag.ItemIsFocusable, True)
         
-        self.normal_color = QColor(122, 168, 232, 225)
-        self.hover_color = QColor(166, 206, 255, 245)
-        self.selected_color = QColor(255, 152, 196, 250)
-        self.glow_color = QColor(6, 12, 24, 210)
+        self.normal_color = QColor(198, 144, 170, 242)
+        self.hover_color = QColor(231, 184, 206, 255)
+        self.selected_color = QColor(167, 132, 255, 255)
+        self.glow_color = QColor(24, 16, 23, 218)
         
         self.current_color = self.normal_color
         self._hovered = False
@@ -70,13 +64,13 @@ class DynamicEdge(QGraphicsPathItem):
         
         self.label_text = QGraphicsSimpleTextItem()
         self.label_text.setFont(QFont("Consolas", 10, QFont.Weight.DemiBold))
-        self.label_text.setBrush(QBrush(QColor(238, 245, 255)))
+        self.label_text.setBrush(QBrush(QColor(255, 241, 247)))
         self.label_text.setZValue(0.2)
         self.label_text.setVisible(False)
 
         self.label_bg = QGraphicsPathItem()
-        self.label_bg.setPen(QPen(QColor(104, 150, 215, 210), 1.0))
-        self.label_bg.setBrush(QBrush(QColor(10, 18, 31, 228)))
+        self.label_bg.setPen(QPen(QColor(164, 103, 131, 210), 1.0))
+        self.label_bg.setBrush(QBrush(QColor(41, 41, 41, 238)))
         self.label_bg.setZValue(0.1)
         self.label_bg.setVisible(False)
         
@@ -93,7 +87,7 @@ class DynamicEdge(QGraphicsPathItem):
         normalized = str(style_key or "").strip().lower().replace("-", "_").replace(" ", "_")
         if normalized in cls.EDGE_RENDER_STYLES:
             return normalized
-        return "classic_dashed"
+        return "signal_flow"
 
     @classmethod
     def render_style_options(cls):
@@ -106,11 +100,11 @@ class DynamicEdge(QGraphicsPathItem):
         legacy_style = str(getattr(self.edge_data, "style", "") or "").strip().lower()
         legacy_map = {
             "dashed": "classic_dashed",
-            "dotted": "dotted",
-            "solid": "solid",
-            "dash_dot": "dash_dot",
+            "dotted": "soft_dashed",
+            "solid": "signal_flow",
+            "dash_dot": "accent_arc",
         }
-        return legacy_map.get(legacy_style, legacy_style or "classic_dashed")
+        return legacy_map.get(legacy_style, legacy_style or "signal_flow")
 
     def set_render_style(self, style_key):
         self.render_style_key = self.normalize_render_style(style_key)
@@ -147,27 +141,136 @@ class DynamicEdge(QGraphicsPathItem):
     def update_path(self):
         if not self.source_node or not self.target_node:
             return
-            
+
         start_point = self.get_node_output_point(self.source_node)
         end_point = self.get_node_input_point(self.target_node)
-        
-        path = QPainterPath()
-        path.moveTo(start_point)
+        shared_stacker_rect = self._shared_parent_stacker_rect()
         
         dx = end_point.x() - start_point.x()
-        control_offset_x = max(70.0, abs(dx) * 0.45)
-        if dx < 0:
-            control_offset_x = -control_offset_x
-        
-        ctrl1 = QPointF(start_point.x() + control_offset_x, start_point.y())
-        ctrl2 = QPointF(end_point.x() - control_offset_x, end_point.y())
-        
-        path.cubicTo(ctrl1, ctrl2, end_point)
+        dy = end_point.y() - start_point.y()
+        path = QPainterPath()
+        path.moveTo(start_point)
+
+        if dx >= 80.0 and abs(dy) <= 18.0:
+            path.lineTo(end_point)
+        elif dx >= 36.0:
+            control_offset_x = max(56.0, abs(dx) * 0.34)
+            vertical_bias = min(42.0, abs(dy) * 0.16)
+            ctrl1 = QPointF(start_point.x() + control_offset_x, start_point.y() + vertical_bias)
+            ctrl2 = QPointF(end_point.x() - control_offset_x, end_point.y() - vertical_bias)
+            path.cubicTo(ctrl1, ctrl2, end_point)
+        else:
+            lane_offset = max(42.0, min(92.0, abs(dy) * 0.35 + 46.0))
+            lane_y = max(start_point.y(), end_point.y()) + lane_offset
+            exit_x = start_point.x() + 34.0
+            entry_x = end_point.x() - 34.0
+            radius = 14.0
+
+            if shared_stacker_rect is not None:
+                lane_y = self._fit_lane_y_inside_stacker(
+                    lane_y,
+                    start_point,
+                    end_point,
+                    shared_stacker_rect,
+                )
+                exit_x, entry_x = self._fit_lane_x_inside_stacker(
+                    exit_x,
+                    entry_x,
+                    shared_stacker_rect,
+                )
+
+            self._line_to(path, QPointF(exit_x - radius, start_point.y()))
+            self._quad_to(path, QPointF(exit_x, start_point.y()), QPointF(exit_x, start_point.y() + radius))
+            self._line_to(path, QPointF(exit_x, lane_y - radius))
+            self._quad_to(path, QPointF(exit_x, lane_y), QPointF(exit_x - radius, lane_y))
+            self._line_to(path, QPointF(entry_x + radius, lane_y))
+            self._quad_to(path, QPointF(entry_x, lane_y), QPointF(entry_x, lane_y - radius))
+            self._line_to(path, QPointF(entry_x, end_point.y() + radius))
+            self._quad_to(path, QPointF(entry_x, end_point.y()), QPointF(entry_x + radius, end_point.y()))
+            self._line_to(path, end_point)
         
         self.setPath(path)
         self._ensure_label_items_in_scene()
         self.update_label_position()
         self.update()
+
+    def _shared_parent_stacker_rect(self):
+        source_parent = self._node_parent_stacker_id(self.source_node)
+        target_parent = self._node_parent_stacker_id(self.target_node)
+        if not source_parent or source_parent != target_parent:
+            return None
+
+        scene = self.scene()
+        if scene is None:
+            return None
+
+        for item in scene.items():
+            if str(getattr(item, "stacker_id", "") or "").strip() != source_parent:
+                continue
+            item_rect = item.sceneBoundingRect()
+            if item_rect.isNull() or item_rect.isEmpty():
+                continue
+            return item_rect
+
+        return None
+
+    def _node_parent_stacker_id(self, widget):
+        node = getattr(widget, "node", None)
+        if node is None:
+            return ""
+        data = getattr(node, "data", {}) or {}
+        return str(data.get("parent_stacker_id", "") or "").strip()
+
+    def _fit_lane_y_inside_stacker(self, lane_y, start_point, end_point, stacker_rect):
+        header_clearance = 38.0
+        bottom_clearance = 16.0
+        top_limit = float(stacker_rect.top() + header_clearance)
+        bottom_limit = float(stacker_rect.bottom() - bottom_clearance)
+
+        if bottom_limit <= top_limit + 10.0:
+            return lane_y
+
+        # Prefer a path beneath both node bodies (not just anchor points).
+        source_rect = self._scene_rect_for_widget(self.source_node)
+        target_rect = self._scene_rect_for_widget(self.target_node)
+        source_bottom = float(source_rect.bottom()) if source_rect is not None else float(start_point.y())
+        target_bottom = float(target_rect.bottom()) if target_rect is not None else float(end_point.y())
+
+        preferred = max(source_bottom, target_bottom) + 16.0
+        preferred = max(preferred, top_limit)
+        preferred = min(preferred, bottom_limit)
+
+        return preferred
+
+    def _scene_rect_for_widget(self, widget):
+        if widget is None:
+            return None
+        try:
+            rect = widget.sceneBoundingRect()
+        except Exception:
+            return None
+        if rect.isNull() or rect.isEmpty():
+            return None
+        return rect
+
+    def _fit_lane_x_inside_stacker(self, exit_x, entry_x, stacker_rect):
+        side_clearance = 22.0
+        left_limit = float(stacker_rect.left() + side_clearance)
+        right_limit = float(stacker_rect.right() - side_clearance)
+
+        if right_limit <= left_limit + 12.0:
+            return exit_x, entry_x
+
+        clamped_exit = max(left_limit, min(float(exit_x), right_limit))
+        clamped_entry = max(left_limit, min(float(entry_x), right_limit))
+
+        return clamped_exit, clamped_entry
+
+    def _line_to(self, path: QPainterPath, point: QPointF):
+        path.lineTo(point)
+
+    def _quad_to(self, path: QPainterPath, control: QPointF, end: QPointF):
+        path.quadTo(control, end)
     
     def update_label(self):
         if self.edge_data:
@@ -204,6 +307,15 @@ class DynamicEdge(QGraphicsPathItem):
                 point_at_50.x() - (text_rect.width() / 2),
                 point_at_50.y() - (text_rect.height() / 2),
             )
+
+    def set_content_visible(self, visible: bool):
+        visible = bool(visible)
+        self.setVisible(visible)
+        if not visible:
+            self.label_text.setVisible(False)
+            self.label_bg.setVisible(False)
+            return
+        self.update_label()
 
     def get_node_output_point(self, node_widget):
         if hasattr(node_widget, 'get_output_connection_point'):
@@ -253,12 +365,15 @@ class DynamicEdge(QGraphicsPathItem):
         else:
             pen_color = self.current_color
 
+        solid_pen_color = QColor(pen_color)
+        solid_pen_color.setAlpha(max(238, solid_pen_color.alpha()))
+
         path = self.path()
         style_data = self._current_render_style()
-        line_width = float(style_data["line_width"]) + (0.45 if self._hovered else 0.0)
-        glow_width = float(style_data["glow_width"]) + (0.45 if self._hovered else 0.0)
+        line_width = float(style_data["line_width"]) + (0.35 if self._hovered else 0.0)
+        glow_width = float(style_data["glow_width"]) + (0.35 if self._hovered else 0.0)
         if self.isSelected():
-            glow_width += 1.0
+            glow_width += 0.8
 
         glow_pen = QPen(self.glow_color)
         glow_pen.setWidthF(glow_width)
@@ -268,7 +383,7 @@ class DynamicEdge(QGraphicsPathItem):
         painter.setPen(glow_pen)
         painter.drawPath(path)
 
-        pen = QPen(pen_color)
+        pen = QPen(solid_pen_color)
         pen.setWidthF(line_width)
         pen.setStyle(style_data["pen_style"])
         dash_pattern = style_data.get("dash_pattern")
@@ -279,6 +394,73 @@ class DynamicEdge(QGraphicsPathItem):
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         painter.setPen(pen)
         painter.drawPath(path)
+
+        inner_pen = QPen(QColor(255, 243, 248, 108 if not self._hovered else 132))
+        inner_pen.setWidthF(max(0.75, line_width * 0.32))
+        inner_pen.setStyle(Qt.PenStyle.SolidLine)
+        inner_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        inner_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(inner_pen)
+        painter.drawPath(path)
+        self._draw_direction_arrow(painter, solid_pen_color, line_width)
+
+    def _draw_direction_arrow(self, painter: QPainter, pen_color: QColor, line_width: float):
+        path = self.path()
+        if path.elementCount() < 2:
+            return
+
+        tip_percent = 1.0
+        base_percent = 0.93
+        try:
+            total_length = float(path.length())
+        except Exception:
+            total_length = 0.0
+
+        if total_length > 1.0:
+            base_offset = min(max(16.0, line_width * 7.0), total_length * 0.42)
+            base_percent = float(path.percentAtLength(max(0.0, total_length - base_offset)))
+
+        if base_percent >= tip_percent:
+            base_percent = max(0.0, tip_percent - 0.07)
+        base_percent = min(0.985, max(0.02, base_percent))
+
+        tip = path.pointAtPercent(tip_percent)
+        base = path.pointAtPercent(base_percent)
+        vector = QPointF(tip.x() - base.x(), tip.y() - base.y())
+        length = (vector.x() ** 2 + vector.y() ** 2) ** 0.5
+
+        if length < 0.001:
+            try:
+                angle_degrees = float(path.angleAtPercent(0.995))
+                angle_radians = angle_degrees * 3.141592653589793 / 180.0
+                unit_x = math.cos(angle_radians)
+                unit_y = -math.sin(angle_radians)
+            except Exception:
+                return
+        else:
+            unit_x = vector.x() / length
+            unit_y = vector.y() / length
+
+        perp_x = -unit_y
+        perp_y = unit_x
+
+        arrow_length = max(10.5, line_width * 5.1)
+        arrow_half_width = max(4.4, line_width * 2.35)
+        back_point = QPointF(tip.x() - unit_x * arrow_length, tip.y() - unit_y * arrow_length)
+
+        arrow = QPolygonF(
+            [
+                tip,
+                QPointF(back_point.x() + perp_x * arrow_half_width, back_point.y() + perp_y * arrow_half_width),
+                QPointF(back_point.x() - perp_x * arrow_half_width, back_point.y() - perp_y * arrow_half_width),
+            ]
+        )
+
+        painter.save()
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QBrush(QColor(pen_color)))
+        painter.drawPolygon(arrow)
+        painter.restore()
     
     def edit_edge(self):
         if not self.edge_data:

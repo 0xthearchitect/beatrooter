@@ -9,7 +9,13 @@ class NodeFactory:
                 'color': '#ff6b6b',
                 'default_data': {
                     'url': 'https://example.com',
+                    'title': '',
+                    'http_status': '',
+                    'web_server': '',
+                    'redirect_location': '',
+                    'ip_address': '',
                     'technology_stack': '',
+                    'fingerprint': '',
                     'authentication_method': '',
                     'endpoints': '',
                     'vulnerabilities_found': 0,
@@ -91,9 +97,15 @@ class NodeFactory:
                 'default_data': {
                     'port': 80,
                     'service': 'http',
+                    'protocol': 'tcp',
+                    'state': 'open',
+                    'host': '',
+                    'ip_address': '',
+                    'hostname': '',
                     'version': '',
                     'banner': '',
                     'vulnerabilities': '',
+                    'generated_by_tool_id': '',
                     'exploitable': False,
                     'notes': ''
                 }
@@ -985,6 +997,28 @@ class NodeFactory:
                 'timestamp': '',
                 'notes': ''
             }
+        },
+        'wordlists': {
+            'name': 'Wordlists',
+            'color': '#14b8a6',
+            'category': 'general',
+            'default_data': {
+                'name': 'custom_wordlist',
+                'wordlist_kind': 'generic',
+                'source_mode': 'custom',
+                'source_label': '',
+                'source_path': '',
+                'source_url': '',
+                'source_note_id': '',
+                'content_storage': 'inline',
+                'external_content_relative_path': '',
+                'external_content_path': '',
+                'entry_count': 0,
+                'preview_entries': '',
+                'validation_message': 'Add one entry per line. Plain text only.',
+                'content': '',
+                'notes': ''
+            }
         }
     }
 
@@ -1197,6 +1231,8 @@ class NodeFactory:
         "artifact_kind": ["capture", "scan_results", "attack_log", "handshake_dump", "script", "unknown"],
         "attack_result": ["success", "failed", "partial", "unknown"],
         "protocol_family": ["subghz", "infrared", "wifi", "rf", "unknown"],
+        "wordlist_kind": ["generic", "passwords", "directories", "subdomains", "usernames"],
+        "source_mode": ["custom", "imported_file", "beatnote", "remote_preset"],
     }
 
     DEFAULT_NODE_SYMBOLS = {
@@ -1211,6 +1247,7 @@ class NodeFactory:
         "screenshot": "[IMG]",
         "command": "[CMD]",
         "script": "[SCRIPT]",
+        "wordlists": "[WLIST]",
         "web_application": "[WEB]",
         "endpoint": "[ENDPT]",
         "vulnerability_finding": "[FIND]",

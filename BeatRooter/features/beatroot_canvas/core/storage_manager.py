@@ -1,7 +1,10 @@
 import json
 import os
+import copy
+import tempfile
 from datetime import datetime
 from features.beatroot_canvas.models.graph_data import GraphData
+from features.wordlists.core.wordlist_service import WordlistService
 from PyQt6.QtGui import QPixmap, QPainter, QColor
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QRectF, QSize
@@ -10,14 +13,25 @@ from PyQt6.QtSvg import QSvgGenerator
 class StorageManager:
     def __init__(self):
         self.current_file = None
+
+    def estimate_graph_size_bytes(self, graph_data: GraphData, filename: str | None = None) -> int:
+        try:
+            target_filename = str(filename or "").strip()
+            if not target_filename:
+                target_filename = os.path.join(tempfile.gettempdir(), "beatrooter_estimate.brt")
+            data = self._prepare_graph_data_for_save(graph_data, target_filename)
+            serialized = json.dumps(data, ensure_ascii=False)
+            return len(serialized.encode("utf-8"))
+        except Exception:
+            return 0
     
     def save_graph(self, graph_data: GraphData, filename: str) -> bool:
         try:
             graph_data.metadata['modified'] = datetime.now().isoformat()
             if not graph_data.metadata.get('created'):
                 graph_data.metadata['created'] = datetime.now().isoformat()
-            
-            data = graph_data.to_dict()
+
+            data = self._prepare_graph_data_for_save(graph_data, filename)
             
             with open(filename, 'w', encoding='utf-8') as f:
                 json.dump(data, f, indent=2, ensure_ascii=False)
@@ -35,12 +49,32 @@ class StorageManager:
                 data = json.load(f)
             
             graph_data = GraphData.from_dict(data)
+            self._hydrate_graph_after_load(graph_data, filename)
             self.current_file = filename
             return graph_data
             
         except Exception as e:
             print(f"Error loading graph: {e}")
             return GraphData()
+
+    def _prepare_graph_data_for_save(self, graph_data: GraphData, filename: str) -> dict:
+        data = copy.deepcopy(graph_data.to_dict())
+        for node_payload in data.get("nodes", []):
+            if node_payload.get("type") != "wordlists":
+                continue
+            node_payload["data"] = WordlistService.prepare_node_data_for_save(
+                node_payload.get("id", ""),
+                node_payload.get("data", {}),
+                filename,
+            )
+            node_payload["data"].pop("external_content_path", None)
+        return data
+
+    def _hydrate_graph_after_load(self, graph_data: GraphData, filename: str):
+        for node in graph_data.nodes.values():
+            if getattr(node, "type", "") != "wordlists":
+                continue
+            node.data = WordlistService.hydrate_node_data_after_load(node.data, filename)
     
     def export_png(self, graph_data: GraphData, filename: str, scene=None) -> bool:
         try:

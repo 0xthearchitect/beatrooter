@@ -5,7 +5,6 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QLabel,
-    QLineEdit,
     QTextEdit,
     QVBoxLayout,
 )
@@ -17,7 +16,7 @@ class ToolNodeConfigDialog(QDialog):
     def __init__(self, node, parent=None):
         super().__init__(parent)
         self.node = node
-        self.setWindowTitle(f"Configure {ToolNodeService.get_tool_display_name(node.data.get('tool_name', 'tool'))}")
+        self.setWindowTitle(f"{ToolNodeService.get_tool_display_name(node.data.get('tool_name', 'tool'))} Info")
         self.setMinimumWidth(520)
         self._build_ui()
 
@@ -34,6 +33,8 @@ class ToolNodeConfigDialog(QDialog):
         resolved_target = str(self.node.data.get("resolved_target", "") or "").strip() or "-"
         source_label = str(self.node.data.get("target_source_label", "") or "").strip() or "-"
         compatibility_reason = str(self.node.data.get("compatibility_reason", "") or "").strip() or "-"
+        wordlist_label = str(self.node.data.get("resolved_wordlist_name", "") or "").strip() or "-"
+        wordlist_reason = str(self.node.data.get("wordlist_reason", "") or "").strip() or "-"
 
         resolved_label = QLabel(resolved_target)
         resolved_label.setWordWrap(True)
@@ -44,41 +45,37 @@ class ToolNodeConfigDialog(QDialog):
         reason_label = QLabel(compatibility_reason)
         reason_label.setWordWrap(True)
         info_layout.addRow("Status:", reason_label)
+        if ToolNodeService.tool_supports_wordlist(self.node.data.get("tool_name", "")):
+            wordlist_value_label = QLabel(wordlist_label)
+            wordlist_value_label.setWordWrap(True)
+            wordlist_reason_label = QLabel(wordlist_reason)
+            wordlist_reason_label.setWordWrap(True)
+            info_layout.addRow("Wordlist:", wordlist_value_label)
+            info_layout.addRow("Wordlist Status:", wordlist_reason_label)
         root.addWidget(info_group)
 
-        edit_group = QGroupBox("Advanced Options")
-        edit_layout = QFormLayout(edit_group)
-        edit_layout.setContentsMargins(10, 14, 10, 10)
-        edit_layout.setSpacing(8)
+        notice_group = QGroupBox("Tool Parameters")
+        notice_layout = QVBoxLayout(notice_group)
+        notice_layout.setContentsMargins(10, 14, 10, 10)
+        notice_layout.setSpacing(8)
 
-        self.manual_target_input = QLineEdit()
-        self.manual_target_input.setPlaceholderText("Optional override target")
-        self.manual_target_input.setText(str(self.node.data.get("manual_target", "") or ""))
-        edit_layout.addRow("Manual Target:", self.manual_target_input)
+        notice_label = QLabel(
+            "Tool nodes are configured automatically from connected nodes and runtime state. "
+            "There are no user-editable parameters here."
+        )
+        notice_label.setWordWrap(True)
+        notice_layout.addWidget(notice_label)
 
-        self.options_input = QLineEdit()
-        self.options_input.setPlaceholderText("CLI options, e.g. -sV -Pn")
-        self.options_input.setText(str(self.node.data.get("options", "") or ""))
-        edit_layout.addRow("Options:", self.options_input)
+        root.addWidget(notice_group)
 
-        self.custom_command_input = QLineEdit()
-        self.custom_command_input.setPlaceholderText("Optional full custom command")
-        self.custom_command_input.setText(str(self.node.data.get("custom_command", "") or ""))
-        edit_layout.addRow("Custom Command:", self.custom_command_input)
-
-        root.addWidget(edit_group)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         buttons.rejected.connect(self.reject)
+        buttons.accepted.connect(self.accept)
+        buttons.button(QDialogButtonBox.StandardButton.Close).clicked.connect(self.accept)
         root.addWidget(buttons)
 
     def get_payload(self) -> dict:
-        return {
-            "manual_target": self.manual_target_input.text().strip(),
-            "options": self.options_input.text().strip(),
-            "custom_command": self.custom_command_input.text().strip(),
-        }
+        return {}
 
 
 class ToolNodeOutputDialog(QDialog):

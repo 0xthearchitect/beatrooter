@@ -12,8 +12,10 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QTabWidget,
     QFileDialog,
+    QInputDialog,
     QMessageBox,
     QDialog,
+    QSizePolicy,
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QTimer
 from PyQt6.QtGui import QPixmap
@@ -23,9 +25,11 @@ from features.beatnote.core.beatnote_model import category_label
 from features.beatnote.core.beatnote_service import BeatNoteService, BeatNoteServiceError
 from features.beatroot_canvas.core import NodeFactory
 from features.tools.core.tool_node_service import ToolNodeService
+from features.wordlists.core.wordlist_service import WordlistService, WordlistValidationError
 import os
 import base64
 import json
+import requests
 
 
 class NoWheelComboBox(QComboBox):
@@ -40,12 +44,28 @@ class DetailPanel(QWidget):
     panel_visibility_changed = pyqtSignal(bool)
     TOOL_NODE_HIDDEN_FIELDS = {
         "is_tool_node",
+        "manual_target",
+        "options",
+        "custom_command",
         "target_source_node_id",
+        "target_source_label",
+        "resolved_target",
+        "compatible",
+        "compatibility_reason",
+        "resolved_wordlist_node_id",
+        "resolved_wordlist_label",
+        "resolved_wordlist_name",
+        "wordlist_compatible",
+        "wordlist_reason",
         "created_node_ids",
         "last_output",
         "last_output_preview",
         "last_output_size",
         "has_output",
+        "last_status",
+        "last_exit_code",
+        "last_run_at",
+        "last_command",
     }
     SCREENSHOT_READONLY_FIELDS = {
         "filename",
@@ -58,9 +78,22 @@ class DetailPanel(QWidget):
         "png_info",
         "image_data",
     }
+    WORDLIST_READONLY_FIELDS = {
+        "source_mode",
+        "source_label",
+        "source_path",
+        "source_url",
+        "source_note_id",
+        "content_storage",
+        "external_content_relative_path",
+        "entry_count",
+        "preview_entries",
+        "validation_message",
+    }
     INTERNAL_HIDDEN_FIELDS = {
         "__beatnote_note_id",
         "__beatnote_note_title",
+        "external_content_path",
     }
     
     def __init__(self, main_window=None, *, beatnote_service=None): 
@@ -81,7 +114,7 @@ class DetailPanel(QWidget):
     def setup_ui(self):
         self.setObjectName("DetailPanel")
         main_layout = QVBoxLayout(self)
-        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setContentsMargins(6, 8, 6, 8)
         main_layout.setSpacing(0)
 
         self.right_tabs = QTabWidget()
@@ -96,23 +129,33 @@ class DetailPanel(QWidget):
 
         scroll_area = QScrollArea()
         scroll_area.setObjectName("DetailScrollArea")
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         scroll_widget = QWidget()
         scroll_widget.setObjectName("DetailScrollWidget")
+        scroll_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        scroll_widget.setMinimumWidth(0)
         self.content_layout = QVBoxLayout(scroll_widget)
-        self.content_layout.setContentsMargins(8, 8, 8, 8)
+        self.content_layout.setContentsMargins(6, 6, 6, 6)
         self.content_layout.setSpacing(8)
 
         info_group = QGroupBox("Node Information")
         info_group.setObjectName("NodeInfoGroup")
         info_layout = QFormLayout(info_group)
-        info_layout.setContentsMargins(10, 15, 10, 15)
+        info_layout.setContentsMargins(8, 14, 8, 14)
         info_layout.setSpacing(8)
+        info_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        info_layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        info_layout.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         
         self.node_type_label = QLabel("None")
         self.node_id_label = QLabel("None")
         
-        info_layout.addRow("Type:", self.node_type_label)
-        info_layout.addRow("ID:", self.node_id_label)
+        type_label = QLabel("Type")
+        type_label.setProperty("fieldLabel", True)
+        id_label = QLabel("ID")
+        id_label.setProperty("fieldLabel", True)
+        info_layout.addRow(type_label, self.node_type_label)
+        info_layout.addRow(id_label, self.node_id_label)
         
         self.content_layout.addWidget(info_group)
         
@@ -120,18 +163,19 @@ class DetailPanel(QWidget):
         self.data_group = QGroupBox("Edit Data")
         self.data_group.setObjectName("NodeDataGroup")
         self.data_layout = QFormLayout(self.data_group)
-        self.data_layout.setContentsMargins(10, 15, 10, 15)
+        self.data_layout.setContentsMargins(8, 14, 8, 14)
         self.data_layout.setSpacing(8)
         self.data_group.setVisible(False)
         
         self.data_fields = {}
+        self.data_rows = {}
         
         self.content_layout.addWidget(self.data_group)
         
         # Notes group
-        notes_group = QGroupBox("Notes")
-        notes_group.setObjectName("NotesGroup")
-        notes_layout = QVBoxLayout(notes_group)
+        self.notes_group = QGroupBox("Notes")
+        self.notes_group.setObjectName("NotesGroup")
+        notes_layout = QVBoxLayout(self.notes_group)
         notes_layout.setContentsMargins(10, 15, 10, 15)
         
         self.notes_edit = QTextEdit()
@@ -163,13 +207,16 @@ class DetailPanel(QWidget):
         self.associated_beatnote_label.setObjectName("AssociatedBeatNoteLabel")
         notes_layout.addWidget(self.associated_beatnote_label)
         
-        self.content_layout.addWidget(notes_group)
+        self.content_layout.addWidget(self.notes_group)
         
         self.content_layout.addStretch()
         
         scroll_area.setWidget(scroll_widget)
         scroll_area.setWidgetResizable(True)
         scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._detail_scroll_area = scroll_area
+        self._detail_scroll_widget = scroll_widget
+        self._detail_scroll_area.horizontalScrollBar().valueChanged.connect(self._force_horizontal_scroll_zero)
 
         nodes_tab_layout.addWidget(scroll_area)
         self.right_tabs.addTab(nodes_tab, "Nodes")
@@ -201,8 +248,171 @@ class DetailPanel(QWidget):
         self.right_tabs.addTab(self.tools_tab, "Tools")
 
         main_layout.addWidget(self.right_tabs)
+        self._apply_sidebar_styles()
+        self._sync_detail_scroll_width()
         
         self.clear_panel()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_detail_scroll_width()
+
+    def _sync_detail_scroll_width(self):
+        if not hasattr(self, "_detail_scroll_area") or not hasattr(self, "_detail_scroll_widget"):
+            return
+        viewport_width = max(0, self._detail_scroll_area.viewport().width())
+        self._detail_scroll_widget.setMinimumWidth(viewport_width)
+        self._detail_scroll_widget.setMaximumWidth(viewport_width)
+        self._force_horizontal_scroll_zero()
+
+    def _force_horizontal_scroll_zero(self, _value=0):
+        if not hasattr(self, "_detail_scroll_area"):
+            return
+        hbar = self._detail_scroll_area.horizontalScrollBar()
+        if hbar.value() != 0:
+            hbar.blockSignals(True)
+            hbar.setValue(0)
+            hbar.blockSignals(False)
+
+    def _apply_sidebar_styles(self):
+        self.setStyleSheet(
+            """
+            QWidget#DetailPanel {
+                background-color: #1f1f1f;
+            }
+            QTabWidget#RightTabs::pane {
+                border: none;
+                background: transparent;
+            }
+            QTabWidget#RightTabs QTabBar {
+                background: transparent;
+            }
+            QTabWidget#RightTabs QTabBar::tab {
+                background-color: #2a2a2a;
+                color: #b4b4b4;
+                border: 1px solid #353535;
+                border-radius: 7px;
+                padding: 6px 12px;
+                margin-right: 6px;
+                min-width: 54px;
+            }
+            QTabWidget#RightTabs QTabBar::tab:selected {
+                background-color: #343434;
+                color: #f2f2f2;
+                border: 1px solid #4a4a4a;
+            }
+            QTabWidget#RightTabs QTabBar::tab:hover:!selected {
+                background-color: #303030;
+                color: #d9d9d9;
+            }
+            QScrollArea#DetailScrollArea, QWidget#DetailScrollWidget {
+                background: transparent;
+                border: none;
+            }
+            QGroupBox#NodeInfoGroup, QGroupBox#NodeDataGroup, QGroupBox#NotesGroup {
+                background-color: #242424;
+                border: 1px solid #343434;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 16px;
+            }
+            QGroupBox#NodeInfoGroup::title, QGroupBox#NodeDataGroup::title, QGroupBox#NotesGroup::title {
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 4px;
+                color: #9f9f9f;
+                font-size: 10px;
+                font-weight: 600;
+                background-color: #1f1f1f;
+            }
+            QLabel {
+                color: #d3d3d3;
+                background: transparent;
+            }
+            QLabel[fieldLabel="true"] {
+                color: #a7a7a7;
+                font-size: 10px;
+                font-weight: 600;
+                letter-spacing: 0.2px;
+            }
+            QLabel#AssociatedBeatNoteLabel {
+                color: #969696;
+                font-size: 10px;
+                padding-top: 2px;
+            }
+            QLineEdit, QTextEdit, QComboBox {
+                background-color: #2b2b2b;
+                color: #f0f0f0;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+                padding: 8px 10px;
+                selection-background-color: #4b4b4b;
+            }
+            QLineEdit:focus, QTextEdit:focus, QComboBox:focus {
+                border: 1px solid #6a6a6a;
+                background-color: #303030;
+            }
+            QTextEdit#NodeNotesEditor {
+                border-radius: 8px;
+                min-height: 170px;
+            }
+            QComboBox::drop-down {
+                border: none;
+                width: 20px;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                width: 0px;
+                height: 0px;
+                border-left: 4px solid transparent;
+                border-right: 4px solid transparent;
+                border-top: 5px solid #9f9f9f;
+                margin-right: 6px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2b2b2b;
+                color: #efefef;
+                border: 1px solid #3a3a3a;
+                selection-background-color: #3a3a3a;
+            }
+            QPushButton {
+                background-color: #2b2b2b;
+                color: #dddddd;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+                padding: 8px 10px;
+                min-height: 18px;
+            }
+            QPushButton:hover {
+                background-color: #313131;
+                border: 1px solid #4a4a4a;
+                color: #f5f5f5;
+            }
+            QPushButton:pressed {
+                background-color: #262626;
+            }
+            QPushButton#BeatNoteAssociateButton {
+                min-width: 84px;
+            }
+            QScrollBar:vertical {
+                background: transparent;
+                width: 8px;
+            }
+            QScrollBar::handle:vertical {
+                background: #4e4e4e;
+                border-radius: 4px;
+                min-height: 24px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background: #686868;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                background: none;
+                border: none;
+                height: 0px;
+            }
+            """
+        )
 
     def attach_tools_widget(self, tools_widget):
         if not tools_widget:
@@ -308,10 +518,13 @@ class DetailPanel(QWidget):
 
     def display_node(self, node):
         self.current_node = node
+        is_special_tool_result = ToolNodeService.is_special_tool_result_node(node)
         self._suppress_history_events = True
         try:
+            if node.type == "wordlists":
+                WordlistService.ensure_node_content_loaded(node.data)
             self.refresh_beatnote_link_options()
-            self.node_type_label.setText(node.type.upper())
+            self.node_type_label.setText(node.type.replace("_", " ").title())
             self.node_id_label.setText(node.id)
 
             self.clear_data_fields()
@@ -321,6 +534,8 @@ class DetailPanel(QWidget):
                     self.notes_edit.setPlainText(str(value))
                 else:
                     if key in self.INTERNAL_HIDDEN_FIELDS:
+                        continue
+                    if ToolNodeService.is_special_tool_result_node(node) and key in ToolNodeService.get_special_node_hidden_fields(node.type):
                         continue
                     if ToolNodeService.is_tool_node(node) and key in self.TOOL_NODE_HIDDEN_FIELDS:
                         continue
@@ -343,6 +558,10 @@ class DetailPanel(QWidget):
                 self.data_layout.addRow("Output:", output_btn)
             
             self.data_group.setVisible(True)
+            self.notes_group.setVisible(not is_special_tool_result)
+            self.notes_edit.setReadOnly(is_special_tool_result)
+            self.beatnote_link_combo.setEnabled((not is_special_tool_result) and self.beatnote_link_combo.count() > 1)
+            self.beatnote_link_btn.setEnabled((not is_special_tool_result) and self.beatnote_link_combo.count() > 1)
         finally:
             self._suppress_history_events = False
     
@@ -358,7 +577,25 @@ class DetailPanel(QWidget):
             print(f"Error creating fields from template: {e}")
     
     def create_data_field(self, key, value):
-        label = QLabel(key.replace('_', ' ').title() + ":")
+        is_tool_node = bool(self.current_node and ToolNodeService.is_tool_node(self.current_node))
+        is_special_tool_result = bool(self.current_node and ToolNodeService.is_special_tool_result_node(self.current_node))
+        label_text = (
+            ToolNodeService.get_special_node_field_label(self.current_node.type, key)
+            if self.current_node and ToolNodeService.is_special_tool_result_node(self.current_node)
+            else key.replace('_', ' ').title()
+        )
+        label = QLabel(label_text)
+        label.setProperty("fieldLabel", True)
+        label.setWordWrap(True)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+
+        row_widget = QWidget()
+        row_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        row_layout = QVBoxLayout(row_widget)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(4)
+        extra_controls_layout = None
 
         if self.current_node and self.current_node.type == 'screenshot' and key in self.SCREENSHOT_READONLY_FIELDS:
             if key == 'image_data':
@@ -377,7 +614,22 @@ class DetailPanel(QWidget):
                 field.setReadOnly(True)
             field.setProperty('readOnlyInfo', True)
             self.data_fields[key] = field
-            self.data_layout.addRow(label, field)
+            row_layout.addWidget(label)
+            row_layout.addWidget(field)
+            self.data_rows[key] = row_widget
+            self.data_layout.addRow(row_widget)
+            return
+
+        if self.current_node and self.current_node.type == 'wordlists' and key in self.WORDLIST_READONLY_FIELDS:
+            field = QLineEdit()
+            field.setText(str(value))
+            field.setReadOnly(True)
+            field.setProperty('readOnlyInfo', True)
+            self.data_fields[key] = field
+            row_layout.addWidget(label)
+            row_layout.addWidget(field)
+            self.data_rows[key] = row_widget
+            self.data_layout.addRow(row_widget)
             return
         
         if key == 'content' and self.current_node and self.current_node.type == 'script':
@@ -406,6 +658,25 @@ class DetailPanel(QWidget):
                 field.clicked.connect(lambda checked, val=value: self.view_image_data(val))
             else:
                 field = QLabel("No image data")
+        elif key == 'content' and self.current_node and self.current_node.type == 'wordlists':
+            field = QTextEdit()
+            field.setPlainText(str(value))
+            field.setMinimumHeight(140)
+            field.setMaximumHeight(240)
+
+            extra_controls_layout = QHBoxLayout()
+            extra_controls_layout.setContentsMargins(0, 0, 0, 0)
+            extra_controls_layout.setSpacing(6)
+
+            import_btn = QPushButton("Import Wordlist")
+            import_btn.clicked.connect(self.import_wordlist_file)
+            extra_controls_layout.addWidget(import_btn)
+
+            preset_btn = QPushButton("Load Preset")
+            preset_btn.clicked.connect(self.import_wordlist_preset)
+            extra_controls_layout.addWidget(preset_btn)
+
+            extra_controls_layout.addStretch()
         elif NodeFactory.get_field_options(key):
             field = NoWheelComboBox()
             options = NodeFactory.get_field_options(key)
@@ -471,10 +742,17 @@ class DetailPanel(QWidget):
         elif isinstance(value, str) and len(value) > 50:
             field = QTextEdit()
             field.setPlainText(str(value))
-            field.setMaximumHeight(80)
+            if is_special_tool_result and key == "raw_excerpt":
+                field.setMinimumHeight(180)
+                field.setMaximumHeight(260)
+            else:
+                field.setMaximumHeight(80)
         else:
             field = QLineEdit()
             field.setText(str(value))
+
+        if is_tool_node or is_special_tool_result:
+            self._set_widget_read_only(field)
         
         if key != 'content' or self.current_node.type != 'script':
             field.setProperty('fieldKey', key)
@@ -485,7 +763,22 @@ class DetailPanel(QWidget):
             field.currentTextChanged.connect(self.on_field_changed)
         
         self.data_fields[key] = field
-        self.data_layout.addRow(label, field)
+        row_layout.addWidget(label)
+        if extra_controls_layout is not None:
+            row_layout.addLayout(extra_controls_layout)
+        row_layout.addWidget(field)
+        self.data_rows[key] = row_widget
+        self.data_layout.addRow(row_widget)
+
+    def _set_widget_read_only(self, widget):
+        if isinstance(widget, QLineEdit):
+            widget.setReadOnly(True)
+        elif isinstance(widget, QTextEdit):
+            widget.setReadOnly(True)
+        elif isinstance(widget, QComboBox):
+            widget.setEnabled(False)
+        elif isinstance(widget, QPushButton):
+            widget.setEnabled(False)
 
     def view_image_data(self, image_data):
         try:
@@ -742,20 +1035,18 @@ class DetailPanel(QWidget):
         
         self.current_node.data['credential_type'] = new_type
         
-        password_field = self.data_fields.get('password')
-        hash_field = self.data_fields.get('password_hash')
+        password_row = self.data_rows.get('password')
+        hash_row = self.data_rows.get('password_hash')
         
-        if password_field and hash_field:
+        if password_row and hash_row:
             if new_type == 'password':
-                password_field.setVisible(True)
-                self.data_layout.labelForField(password_field).setVisible(True)
-                hash_field.setVisible(False)
-                self.data_layout.labelForField(hash_field).setVisible(False)
+                password_row.setVisible(True)
+                hash_row.setVisible(False)
             else:
-                password_field.setVisible(False)
-                self.data_layout.labelForField(password_field).setVisible(False)
-                hash_field.setVisible(True)
-                self.data_layout.labelForField(hash_field).setVisible(True)
+                password_row.setVisible(False)
+                hash_row.setVisible(True)
+        self.node_data_updated.emit(self.current_node)
+        self.queue_history_save(f"Update {self.current_node.type} node credential_type")
         
     def clear_data_fields(self):
         for i in reversed(range(self.data_layout.count())):
@@ -764,6 +1055,7 @@ class DetailPanel(QWidget):
                 item.widget().deleteLater()
         
         self.data_fields.clear()
+        self.data_rows.clear()
 
         if hasattr(self, 'image_preview_label'):
             self.image_preview_label.deleteLater()
@@ -782,10 +1074,13 @@ class DetailPanel(QWidget):
                 item.widget().deleteLater()
         
         self.data_fields.clear()
+        self.data_rows.clear()
         self.notes_edit.clear()
+        self.notes_edit.setReadOnly(False)
         self.refresh_beatnote_link_options()
         self.associated_beatnote_label.setText("Associated BeatNote: none")
         self.data_group.setVisible(False)
+        self.notes_group.setVisible(True)
 
     def _beatnote_plain_text(self, raw_content):
         text = QTextDocumentFragment.fromHtml(str(raw_content or "")).toPlainText().strip()
@@ -816,9 +1111,10 @@ class DetailPanel(QWidget):
 
         combo_index = self.beatnote_link_combo.findData(selected_note_id) if selected_note_id else -1
         self.beatnote_link_combo.setCurrentIndex(combo_index if combo_index >= 0 else 0)
-        self.beatnote_link_combo.setEnabled(bool(notes))
+        allow_linking = bool(notes) and not ToolNodeService.is_special_tool_result_node(self.current_node)
+        self.beatnote_link_combo.setEnabled(allow_linking)
         if hasattr(self, "beatnote_link_btn"):
-            self.beatnote_link_btn.setEnabled(bool(notes))
+            self.beatnote_link_btn.setEnabled(allow_linking)
 
         self._refresh_associated_beatnote_label()
         self.beatnote_link_combo.blockSignals(False)
@@ -847,11 +1143,40 @@ class DetailPanel(QWidget):
 
         title = str(getattr(note, "title", "") or "").strip() or "BeatNote"
         plain_text = self._beatnote_plain_text(getattr(note, "content", ""))
+        project_id = "beatnote-standalone"
+        if self.main_window and hasattr(self.main_window, "_ensure_ndc_project_id"):
+            project_id = self.main_window._ensure_ndc_project_id(
+                getattr(self.main_window.graph_manager.graph_data, "metadata", {})
+            )
 
-        self.current_node.data["__beatnote_note_id"] = note_id
-        self.current_node.data["__beatnote_note_title"] = title
-        self.notes_edit.setPlainText(plain_text)
+        try:
+            self.beatnote_service.link_note_to_node(
+                note_id,
+                project_id=project_id,
+                node_id=self.current_node.id,
+                source_ref="beatroot_canvas.node_association",
+            )
+        except BeatNoteServiceError:
+            pass
+
+        if self.current_node.type == "wordlists":
+            self.current_node.data["__beatnote_note_id"] = note_id
+            self.current_node.data["__beatnote_note_title"] = title
+            self.current_node.data["content"] = plain_text
+            self.current_node.data["source_mode"] = "beatnote"
+            self.current_node.data["source_label"] = title
+            self.current_node.data["source_path"] = ""
+            self.current_node.data["source_url"] = ""
+            self.current_node.data["source_note_id"] = note_id
+            self._sync_wordlist_node_from_content()
+            self.display_node(self.current_node)
+        else:
+            self.current_node.data["__beatnote_note_id"] = note_id
+            self.current_node.data["__beatnote_note_title"] = title
+            self.notes_edit.setPlainText(plain_text)
         self._refresh_associated_beatnote_label()
+        self.node_data_updated.emit(self.current_node)
+        self.queue_history_save(f"Update {self.current_node.type} node BeatNote association")
 
         status = getattr(self.main_window, "statusBar", None)
         if callable(status) and status() is not None:
@@ -859,6 +1184,8 @@ class DetailPanel(QWidget):
     
     def on_field_changed(self):
         if not self.current_node:
+            return
+        if ToolNodeService.is_special_tool_result_node(self.current_node):
             return
             
         sender = self.sender()
@@ -902,6 +1229,9 @@ class DetailPanel(QWidget):
             else:
                 self.current_node.data[key] = value
 
+        if self.current_node.type == "wordlists" and key in {"content", "wordlist_kind"}:
+            self._sync_wordlist_node_from_content()
+
         self.node_data_updated.emit(self.current_node)
         self.queue_history_save(f"Update {self.current_node.type} node field: {key}")
 
@@ -909,6 +1239,115 @@ class DetailPanel(QWidget):
     
     def on_notes_changed(self):
         if self.current_node:
+            if ToolNodeService.is_special_tool_result_node(self.current_node):
+                return
             self.current_node.data['notes'] = self.notes_edit.toPlainText()
             self.node_data_updated.emit(self.current_node)
             self.queue_history_save(f"Update {self.current_node.type} node notes")
+
+    def import_wordlist_file(self):
+        if not self.current_node or self.current_node.type != "wordlists":
+            return
+
+        filename, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Wordlist",
+            "",
+            "Text Files (*.txt *.lst *.list *.dic *.wordlist);;All Files (*)",
+        )
+        if not filename:
+            return
+
+        try:
+            payload = WordlistService.import_from_file(
+                filename,
+                kind=self.current_node.data.get("wordlist_kind", "generic"),
+            )
+        except (OSError, WordlistValidationError) as exc:
+            QMessageBox.warning(self, "Wordlists", str(exc))
+            return
+
+        WordlistService.apply_payload_to_node_data(
+            self.current_node.data,
+            payload,
+            source_mode="imported_file",
+            source_label=os.path.basename(filename),
+            source_path=str(payload.get("source_path", "") or filename),
+            source_url="",
+            source_note_id="",
+        )
+        self.display_node(self.current_node)
+        self.node_data_updated.emit(self.current_node)
+        self.queue_history_save("Import wordlist file")
+
+    def import_wordlist_preset(self):
+        if not self.current_node or self.current_node.type != "wordlists":
+            return
+
+        presets = list(WordlistService.get_preset_sources())
+        if not presets:
+            QMessageBox.information(self, "Wordlists", "No remote wordlist presets are configured.")
+            return
+
+        labels = [f"{preset['name']} ({preset['kind']})" for preset in presets]
+        choice, accepted = QInputDialog.getItem(
+            self,
+            "Load Wordlist Preset",
+            "Choose a preset:",
+            labels,
+            0,
+            False,
+        )
+        if not accepted or not choice:
+            return
+
+        preset = presets[labels.index(choice)]
+        try:
+            payload, preset_info = WordlistService.import_from_preset(preset["key"])
+        except (requests.RequestException, WordlistValidationError, Exception) as exc:
+            QMessageBox.warning(self, "Wordlists", f"Failed to download preset.\n\n{exc}")
+            return
+
+        WordlistService.apply_payload_to_node_data(
+            self.current_node.data,
+            payload,
+            source_mode="remote_preset",
+            source_label=preset_info["name"],
+            source_path="",
+            source_url=preset_info["url"],
+            source_note_id="",
+        )
+        self.current_node.data["wordlist_kind"] = preset_info["kind"]
+        self.display_node(self.current_node)
+        self.node_data_updated.emit(self.current_node)
+        self.queue_history_save("Import wordlist preset")
+
+    def _sync_wordlist_node_from_content(self):
+        if not self.current_node or self.current_node.type != "wordlists":
+            return
+
+        inspection = WordlistService.inspect_node_data(self.current_node.data)
+        self.current_node.data["wordlist_kind"] = inspection["kind"]
+        self.current_node.data["entry_count"] = inspection["entry_count"]
+        self.current_node.data["preview_entries"] = inspection["preview_entries"]
+        self.current_node.data["validation_message"] = inspection["validation_message"]
+        if str(self.current_node.data.get("content", "") or "").strip():
+            self.current_node.data["content_storage"] = "inline"
+            self.current_node.data["external_content_relative_path"] = ""
+            self.current_node.data["external_content_path"] = ""
+
+        self._set_wordlist_aux_field_value("entry_count", self.current_node.data["entry_count"])
+        self._set_wordlist_aux_field_value("preview_entries", self.current_node.data["preview_entries"])
+        self._set_wordlist_aux_field_value("validation_message", self.current_node.data["validation_message"])
+        self._set_wordlist_aux_field_value("content_storage", self.current_node.data.get("content_storage", "inline"))
+        self._set_wordlist_aux_field_value(
+            "external_content_relative_path",
+            self.current_node.data.get("external_content_relative_path", ""),
+        )
+
+    def _set_wordlist_aux_field_value(self, key, value):
+        widget = self.data_fields.get(key)
+        if isinstance(widget, QLineEdit):
+            widget.blockSignals(True)
+            widget.setText(str(value))
+            widget.blockSignals(False)

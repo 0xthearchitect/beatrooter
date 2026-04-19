@@ -8,6 +8,7 @@ from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QFont, QIcon
 from utils.beat_helper import BeatHelper, ManualSearchThread, ManualDownloadThread
 import os
+from typing import Any, Callable
 
 
 class ManualResultItem(QFrame):
@@ -188,7 +189,13 @@ class ManualResultItem(QFrame):
 class BeatHelperDialog(QDialog):
     """Main BeatHelper dialog for searching and downloading manuals"""
     
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        ndc_recorder: Callable[..., None] | None = None,
+        ndc_related_node_id: str | None = None,
+    ):
         super().__init__(parent)
         self.setWindowTitle("BeatHelper - Manual Finder")
         self.setMinimumSize(800, 700)
@@ -197,9 +204,23 @@ class BeatHelperDialog(QDialog):
         self.search_thread = None
         self.download_thread = None
         self.current_results = []
+        self.ndc_recorder = ndc_recorder
+        self.ndc_related_node_id = str(ndc_related_node_id or "").strip() or None
+        self._active_query = ""
+        self._active_download_context: dict[str, Any] = {}
         
         self.setup_ui()
         self.apply_styles()
+
+    def _record_ndc_event(self, action: str, **kwargs) -> None:
+        if not callable(self.ndc_recorder):
+            return
+        payload = dict(kwargs)
+        payload.setdefault("related_node_id", self.ndc_related_node_id)
+        try:
+            self.ndc_recorder(action, **payload)
+        except Exception:
+            return
     
     def setup_ui(self):
         main_layout = QVBoxLayout(self)
@@ -396,6 +417,7 @@ class BeatHelperDialog(QDialog):
         
         # Clear previous results
         self.clear_results()
+        self._active_query = query
         
         # Update UI
         self.search_btn.setEnabled(False)
@@ -416,6 +438,19 @@ class BeatHelperDialog(QDialog):
         # Re-enable search
         self.search_btn.setEnabled(True)
         self.search_input.setEnabled(True)
+        self._record_ndc_event(
+            "analysis_captured",
+            tool_name="beathelper_manual_finder",
+            surface="helper_window",
+            result_summary=(
+                f"BeatHelper search for '{self._active_query}' returned {len(results)} manual result(s)."
+                if results
+                else f"BeatHelper search for '{self._active_query}' returned no manual results."
+            ),
+            result_status="success" if results else "partial",
+            result_count=len(results),
+            target_ref=self._active_query,
+        )
         
         if results:
             self.status_label.setText(f"Found {len(results)} manual(s)")
@@ -439,6 +474,14 @@ class BeatHelperDialog(QDialog):
         self.search_input.setEnabled(True)
         self.status_label.setText(f"Error: {error_msg}")
         self.status_label.setStyleSheet("color: #ff6b6b;")
+        self._record_ndc_event(
+            "analysis_captured",
+            tool_name="beathelper_manual_finder",
+            surface="helper_window",
+            result_summary=f"BeatHelper search for '{self._active_query}' failed: {error_msg}",
+            result_status="failure",
+            target_ref=self._active_query,
+        )
     
     def on_progress_update(self, message):
         self.status_label.setText(message)
@@ -491,6 +534,11 @@ class BeatHelperDialog(QDialog):
         self.progress_group.setVisible(True)
         self.progress_label.setText(f"Downloading: {manual_data['title']}")
         self.progress_bar.setValue(0)
+        self._active_download_context = {
+            "title": str(manual_data.get("title") or "manual"),
+            "url": str(download_url or manual_data.get("url") or "").strip(),
+            "save_path": str(save_path or "").strip(),
+        }
 
         # Start download thread (use resolved or original URL)
         self.download_thread = ManualDownloadThread(download_url, save_path)
@@ -503,6 +551,17 @@ class BeatHelperDialog(QDialog):
     def on_download_complete(self, file_path):
         self.progress_label.setText(f"Download complete!")
         self.progress_label.setStyleSheet("color: #76c893;")
+        download_title = self._active_download_context.get("title", "manual")
+        download_url = self._active_download_context.get("url", "")
+        self._record_ndc_event(
+            "executed",
+            tool_name="beathelper_manual_finder",
+            surface="helper_window",
+            result_summary=f"Downloaded manual '{download_title}' successfully.",
+            result_status="success",
+            target_ref=download_url or None,
+            artifact_refs=(file_path,),
+        )
         
         # Hide progress
         from PyQt6.QtCore import QTimer
@@ -534,6 +593,16 @@ class BeatHelperDialog(QDialog):
     def on_download_error(self, error_msg):
         self.progress_label.setText(f"Error: {error_msg}")
         self.progress_label.setStyleSheet("color: #ff6b6b;")
+        save_path = self._active_download_context.get("save_path")
+        self._record_ndc_event(
+            "executed",
+            tool_name="beathelper_manual_finder",
+            surface="helper_window",
+            result_summary=f"Manual download failed: {error_msg}",
+            result_status="failure",
+            target_ref=self._active_download_context.get("url") or None,
+            artifact_refs=((save_path,) if save_path else ()),
+        )
         
         QMessageBox.warning(self, "Download Failed", error_msg)
     
@@ -547,6 +616,14 @@ class BeatHelperDialog(QDialog):
     def view_online(self, url):
         """Open manual URL in browser"""
         BeatHelper.open_manual_in_browser(url)
+        self._record_ndc_event(
+            "helper_invoked",
+            tool_name="beathelper_manual_finder",
+            surface="helper_window",
+            result_summary="Opened a manual result in the system browser.",
+            result_status="success",
+            target_ref=url,
+        )
         
         QMessageBox.information(
             self,
@@ -573,14 +650,39 @@ class BeatHelperDialog(QDialog):
                     "Opening the manual page in your default browser instead."
                 )
                 BeatHelper.open_manual_in_browser(url)
+                self._record_ndc_event(
+                    "helper_invoked",
+                    tool_name="beathelper_manual_finder",
+                    surface="helper_window",
+                    result_summary="No direct PDF was found, so the manual page was opened in the browser instead.",
+                    result_status="partial",
+                    target_ref=url,
+                )
                 return
 
         # Create and show PDF viewer
         pdf_viewer = PDFViewerDialog(pdf_url, self)
+        artifact_refs = (pdf_url,) if os.path.exists(str(pdf_url)) else ()
+        self._record_ndc_event(
+            "helper_invoked",
+            tool_name="beathelper_manual_finder",
+            surface="helper_window",
+            result_summary="Opened a manual PDF in the in-app viewer.",
+            result_status="success",
+            target_ref=pdf_url,
+            artifact_refs=artifact_refs,
+        )
         pdf_viewer.exec()
     
     def show_help(self):
         """Show help dialog"""
+        self._record_ndc_event(
+            "helper_invoked",
+            tool_name="beathelper_manual_finder",
+            surface="helper_window",
+            result_summary="Opened the BeatHelper help panel.",
+            result_status="success",
+        )
         help_text = """
         <h2>BeatHelper - Manual Finder</h2>
         <p><b>How to use:</b></p>
