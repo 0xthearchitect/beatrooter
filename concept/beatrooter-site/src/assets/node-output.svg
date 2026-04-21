@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="68" height="68" viewBox="10 10 68 68" fill="none">
+  <rect x="10" y="10" width="68" height="68" rx="18" fill="#27252A"/>
+  <g transform="translate(19 17)">
+    <path d="M24.95 5.41c0-3.468 2.812-6.28 6.28-6.28h.74v.9c0 3.467-2.811 6.28-6.279 6.28h-.741v-.9Z" fill="#73C86B"/>
+    <path d="M21.418 6.598c-2.451-2.455-2.449-6.43.006-8.881l.525-.523.638.637c2.453 2.453 2.45 6.428-.004 8.88l-.524.523-.64-.636Z" fill="#73C86B"/>
+    <path d="M28.627 7.25c-2.452-2.454-2.45-6.43.005-8.88l.524-.523.639.637c2.453 2.453 2.45 6.428-.004 8.88l-.524.523-.64-.637Z" fill="#73C86B"/>
+    <path d="M9.388 26.086c0-9.172 7.437-16.61 16.609-16.61s16.61 7.438 16.61 16.61c0 6.953-4.274 12.908-10.336 15.395H19.724C13.661 38.994 9.388 33.039 9.388 26.086Z" fill="url(#paint0_radial_small)"/>
+    <circle cx="19.673" cy="21.26" r="5.906" fill="#F49AC4" fill-opacity=".25"/>
+    <rect x="36.5" y="14.5" width="10.5" height="5" rx="2.5" fill="#EB89B8"/>
+    <rect x="15" y="43.5" width="33" height="4.5" rx="2.25" fill="#D15B8E"/>
+    <g fill="#EDB4CC">
+      <circle cx="17.5" cy="51.5" r="1.5"/>
+      <circle cx="22.5" cy="51.5" r="1.5"/>
+      <circle cx="27.5" cy="51.5" r="1.5"/>
+      <circle cx="32.5" cy="51.5" r="1.5"/>
+      <circle cx="37.5" cy="51.5" r="1.5"/>
+      <circle cx="42.5" cy="51.5" r="1.5"/>
+      <circle cx="47.5" cy="51.5" r="1.5"/>
+    </g>
+  </g>
+  <defs>
+    <radialGradient id="paint0_radial_small" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(19 15) rotate(44.608) scale(30)">
+      <stop stop-color="#FFA9D0"/>
+      <stop offset=".48" stop-color="#D85B94"/>
+      <stop offset="1" stop-color="#7E294E"/>
+    </radialGradient>
+  </defs>
+</svg>
