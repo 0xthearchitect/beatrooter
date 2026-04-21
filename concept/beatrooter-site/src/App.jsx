@@ -232,9 +232,9 @@ const TEAM_CONFIG = {
       iconType: "product",
       iconAsset: beetrootLogo,
       details: [
-        ["Core", "DEV / CIBERSECURITY SPECIALIST"],
-        ["Value", "Systems, tooling, stability."],
-        ["Strength", "Strengthening the underground network."],
+        ["Core", "Node-based cybersecurity automation tools"],
+        ["Value", "Automation for beat builders"],
+        ["Goal", "To be an icon in the world of cybersecurity as a tool for orchestrating attacks"],
       ],
     },
     memberC: {
@@ -270,9 +270,9 @@ const TEAM_CONFIG = {
       iconType: "member",
       iconAsset: adamastorImage,
       details: [
-        ["Role", "Ops and growth"],
-        ["Focus", "Delivery and momentum"],
-        ["Strength", "Keeps the machine moving"],
+        ["Core", "DEV / CIBERSECURITY SPECIALIST"],
+        ["Value", "Systems, tooling, stability."],
+        ["Strength", "Strengthening the underground network."],
       ],
     },
   },
