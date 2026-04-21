@@ -1,4 +1,8 @@
 {
+  "version": 2,
+  "installCommand": "npm install --prefix concept/beatrooter-site",
+  "buildCommand": "npm run build --prefix concept/beatrooter-site",
+  "outputDirectory": "concept/beatrooter-site/dist",
   "rewrites": [
     { "source": "/admin", "destination": "/admin.json" },
     { "source": "/admin-panel", "destination": "/admin.json" },
@@ -47,6 +51,7 @@
     { "source": "/staging", "destination": "/admin.json" },
     { "source": "/old", "destination": "/admin.json" },
     { "source": "/upload", "destination": "/admin.json" },
-    { "source": "/uploads", "destination": "/admin.json" }
+    { "source": "/uploads", "destination": "/admin.json" },
+    { "source": "/(.*)", "destination": "/index.html" }
   ]
 }
