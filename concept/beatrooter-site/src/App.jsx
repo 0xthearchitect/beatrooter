@@ -209,7 +209,7 @@ const TEAM_CONFIG = {
       expandedIconSize: 54,
       title: "DEVILBOY",
       accent: "#ee7bb0",
-      headerBackground: "linear-gradient(180deg, rgba(126,34,63,0.96) 0%, rgba(88,25,48,0.92) 100%)",
+      headerBackground: "linear-gradient(180deg, rgba(92,36,59,0.96) 0%, rgba(63,26,42,0.92) 100%)",
       iconType: "member",
       iconAsset: devilBoyImage,
       details: [
