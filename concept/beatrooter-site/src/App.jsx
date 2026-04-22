@@ -91,10 +91,17 @@ const HOME_CONFIG = {
   getInitialNodes(stageWidth) {
     const sideOffset = clamp(stageWidth * 0.12, 116, 170);
     const compactSize = 126;
+    
+    // Generate random Y offsets for organic positioning
+    // Left node goes down, right node goes up, center stays moderate
+    const leftYOffset = Math.random() * 80 + 20;      // 20-100px down
+    const centerYOffset = (Math.random() - 0.5) * 40;  // -20 to +20px
+    const rightYOffset = -(Math.random() * 60 + 15);   // -15 to -75px up
+    
     return {
-      about: { x: sideOffset, y: 250, expanded: false },
-      team: { x: Math.round((stageWidth - compactSize) / 2), y: 250, expanded: false },
-      beatrooter: { x: stageWidth - sideOffset - compactSize, y: 244, expanded: false },
+      about: { x: sideOffset, y: 250 + leftYOffset, expanded: false },
+      team: { x: Math.round((stageWidth - compactSize) / 2), y: 250 + centerYOffset, expanded: false },
+      beatrooter: { x: stageWidth - sideOffset - compactSize, y: 244 + rightYOffset, expanded: false },
     };
   },
   edges: [
