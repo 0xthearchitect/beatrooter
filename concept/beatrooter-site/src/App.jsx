@@ -8,6 +8,9 @@ import theArchitectImage from "./assets/thearchitect.png";
 import devilBoyImage from "./assets/DevilBoy.jpg";
 import adamastorImage from "./assets/0xAdamastor.png";
 import zerodotoneImage from "./assets/ManWithThatHat.png";
+import patreonIcon from "./assets/patreon.png";
+import githubIcon from "./assets/github.png";
+import instagramIcon from "./assets/insta.png";
 
 const DEFAULT_STAGE_WIDTH = 1280;
 const DOUBLE_CLICK_MS = 280;
@@ -639,28 +642,59 @@ function Header({ page, onNavigate }) {
 }
 
 function ContactUsSection() {
+  const [showNodes, setShowNodes] = useState(false);
+
   return (
-    <section className="relative z-20 mx-auto mt-2 w-full max-w-[1280px] px-4 pb-12 lg:px-6">
-      <div className="rounded-[18px] border border-[#8a4a66] bg-[#22191d] shadow-[0_20px_60px_rgba(0,0,0,0.35)]">
-        <div className="border-b border-[#8a4a66] px-5 py-3 text-[13px] font-semibold uppercase tracking-[0.06em] text-[#f0dce6]">
-          Contact Us
-        </div>
-        <div className="flex flex-col gap-4 px-5 py-5 text-[#e2d1da] md:flex-row md:items-center md:justify-between">
-          <div>
-            <div className="text-[18px] font-semibold text-[#f6e8ef]">Let&apos;s build the next node together.</div>
-            <div className="mt-1 text-[14px] text-[#d5bbc8]">Have an idea, feature request, or partnership in mind? Reach out to the Beatrooter team.</div>
-            <a href="mailto:contact@beatrooter.dev" className="mt-2 inline-block text-[14px] text-[#cf5b88] hover:text-[#e77faf]">
-              contact@beatrooter.dev
-            </a>
-          </div>
-          <button
-            type="button"
-            className="inline-flex h-[42px] items-center justify-center rounded-md border border-[#cf5b88] bg-[#b34c79] px-5 text-[14px] font-semibold text-white transition hover:bg-[#c35b88]"
-          >
-            + New Node
-          </button>
-        </div>
+    <section className="relative z-20 mx-auto mt-28 w-full max-w-[1280px] px-4 pb-14 text-center lg:px-6">
+      <div className="font-['Chakra_Petch'] text-[44px] font-semibold uppercase tracking-[0.05em] text-[#f3eff2] md:text-[66px]">
+        Join Us
       </div>
+
+      <div className="mt-2 text-[14px] text-[#d8c2cd]">
+        Build with us across the next wave of nodes.
+      </div>
+
+      <div className="mt-6 flex items-center justify-center">
+        <button
+          type="button"
+          onClick={() => setShowNodes((current) => !current)}
+          className="inline-flex h-[46px] items-center justify-center rounded-full border border-[#cf5b88] bg-[#b34c79] px-8 text-[15px] font-semibold uppercase tracking-[0.04em] text-white transition hover:bg-[#c35b88]"
+        >
+          + New Node
+        </button>
+      </div>
+
+      {showNodes && (
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-8">
+          <a
+            href="https://www.patreon.com/"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Patreon"
+            className="group flex h-[126px] w-[126px] flex-col items-center justify-center rounded-[22px] border border-white/22 bg-[#232323] text-[#f0ddc8] shadow-[0_18px_34px_rgba(0,0,0,0.28)] transition hover:border-[#d3b083] hover:shadow-[0_24px_40px_rgba(0,0,0,0.35)]"
+          >
+            <img src={patreonIcon} alt="Patreon" className="h-14 w-14 object-contain" draggable="false" />
+          </a>
+          <a
+            href="https://github.com/0xthearchitect/beatrooter"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="GitHub"
+            className="group flex h-[126px] w-[126px] flex-col items-center justify-center rounded-[22px] border border-white/22 bg-[#232323] text-[#e8d6ef] shadow-[0_18px_34px_rgba(0,0,0,0.28)] transition hover:border-[#9a7db6] hover:shadow-[0_24px_40px_rgba(0,0,0,0.35)]"
+          >
+            <img src={githubIcon} alt="GitHub" className="h-14 w-14 object-contain" draggable="false" />
+          </a>
+          <a
+            href="https://instagram.com/"
+            target="_blank"
+            rel="noreferrer"
+            aria-label="Instagram"
+            className="group flex h-[126px] w-[126px] flex-col items-center justify-center rounded-[22px] border border-white/22 bg-[#232323] text-[#f2d3df] shadow-[0_18px_34px_rgba(0,0,0,0.28)] transition hover:border-[#cf7ea4] hover:shadow-[0_24px_40px_rgba(0,0,0,0.35)]"
+          >
+            <img src={instagramIcon} alt="Instagram" className="h-14 w-14 object-contain" draggable="false" />
+          </a>
+        </div>
+      )}
     </section>
   );
 }
