@@ -13,6 +13,7 @@ const DEFAULT_STAGE_WIDTH = 1280;
 const DOUBLE_CLICK_MS = 280;
 const DRAG_THRESHOLD_PX = 6;
 const EDGE_STAGE_PADDING = 28;
+const NODE_BOUNDS_TOP_OFFSET = 24;
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -91,14 +92,14 @@ const HOME_CONFIG = {
   getInitialNodes(stageWidth) {
     const sideOffset = clamp(stageWidth * 0.12, 116, 170);
     const compactSize = 126;
-    const minYPosition = 260; // Plenty of breathing room from header
+    const minYPosition = 160; // Plenty of breathing room from header
     
     // Generate random Y offsets for organic positioning
     // Side nodes (left & right) move freely up or down
     // Center node stays almost fixed for visual anchor
-    const leftYOffset = (Math.random() - 0.5) * 120 - 20;   // -80 to +40px (more range, can go both ways)
+    const leftYOffset = (Math.random() - 0.5) * 250;   // -80 to +40px (more range, can go both ways)
     const centerYOffset = (Math.random() - 0.5) * 12;       // -6 to +6px (barely moves)
-    const rightYOffset = (Math.random() - 0.5) * 120 + 20;  // -40 to +80px (more range, can go both ways)
+    const rightYOffset = (Math.random() - 0.5) * 250;  // -40 to +80px (more range, can go both ways)
     
     return {
       about: { x: sideOffset, y: clamp(250 + leftYOffset, minYPosition, 620), expanded: false },
@@ -311,7 +312,11 @@ function toggleNodeExpansion(config, currentNodes, nodeId, stageWidth) {
       ...currentNode,
       expanded: nextExpanded,
       x: clamp(centerX - nextSize.width / 2, 0, Math.max(stageWidth - nextSize.width, 0)),
-      y: clamp(centerY - nextSize.height / 2, 0, config.stageHeight - nextSize.height),
+      y: clamp(
+        centerY - nextSize.height / 2,
+        NODE_BOUNDS_TOP_OFFSET,
+        NODE_BOUNDS_TOP_OFFSET + config.stageHeight - nextSize.height,
+      ),
     },
   };
 }
@@ -797,8 +802,8 @@ function FlowCanvas({ config, className = "", onNavigate }) {
         );
         const nextY = clamp(
           event.clientY - stageRect.top - drag.pointerOffsetY,
-          0,
-          config.stageHeight - size.height,
+          NODE_BOUNDS_TOP_OFFSET,
+          NODE_BOUNDS_TOP_OFFSET + config.stageHeight - size.height,
         );
 
         if (currentNode.x === nextX && currentNode.y === nextY) {
