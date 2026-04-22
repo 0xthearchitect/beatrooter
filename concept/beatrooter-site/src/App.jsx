@@ -91,7 +91,7 @@ const HOME_CONFIG = {
   getInitialNodes(stageWidth) {
     const sideOffset = clamp(stageWidth * 0.12, 116, 170);
     const compactSize = 126;
-    const minYPosition = 200; // More breathing room from header border
+    const minYPosition = 260; // Plenty of breathing room from header
     
     // Generate random Y offsets for organic positioning
     // Side nodes (left & right) move freely up or down
