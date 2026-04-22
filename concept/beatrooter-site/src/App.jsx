@@ -642,7 +642,7 @@ function CompactNode({ meta }) {
   const frameSize = meta.compactFrameSize ?? 112;
 
   return (
-    <div className="flex h-full w-full items-center justify-center rounded-[22px] border border-white/6 bg-[#26242a] shadow-[0_18px_34px_rgba(0,0,0,0.28)]">
+    <div className="flex h-full w-full items-center justify-center rounded-[22px] border border-white/22 bg-[#232323] shadow-[0_18px_34px_rgba(0,0,0,0.28)]">
       <div
         className="flex items-center justify-center rounded-[18px]"
         style={{ width: frameSize, height: frameSize }}
@@ -657,7 +657,7 @@ function ExpandedNode({ meta, onNavigate }) {
   const expandedFrameSize = meta.expandedFrameSize ?? 72;
 
   return (
-    <div className="relative h-full overflow-hidden rounded-[28px] border border-white/10 bg-[#262525] shadow-[0_28px_70px_rgba(0,0,0,0.42)]">
+    <div className="relative h-full overflow-hidden rounded-[28px] border border-white/12 bg-[#232323] shadow-[0_28px_70px_rgba(0,0,0,0.42)]">
       {meta.linkToPage && (
         <button
           type="button"
@@ -926,9 +926,9 @@ function HomePage({ onNavigate }) {
 function TeamPage({ onNavigate }) {
   return (
     <div className="mx-auto flex w-full max-w-[1560px] justify-center px-4 py-6 lg:px-6">
-      <section className="w-full rounded-[36px] border border-[#59565b] bg-[#333132] p-6 shadow-[0_40px_90px_rgba(0,0,0,0.42)]">
-        <div className="relative rounded-[28px] border border-[#4a474c] bg-[#2b2a2a] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.05),0_10px_24px_rgba(0,0,0,0.14)]">
-          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-between border-b border-[#646065] px-5 py-3 text-[#ddd9df]">
+      <section className="w-full rounded-[36px] border border-[#66605d] bg-[#292929] p-6 shadow-[0_40px_90px_rgba(0,0,0,0.42)]">
+        <div className="relative rounded-[28px] border border-[#595451] bg-[#292929] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.04),0_10px_24px_rgba(0,0,0,0.14)]">
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center justify-between border-b border-[#625c59] px-5 py-3 text-[#ddd9df]">
             <div className="text-[18px] font-medium tracking-[0.02em] text-[#f0edf2]">Team</div>
             <div className="flex items-center gap-4 text-[15px] text-white/58">
               <span>5N</span>
