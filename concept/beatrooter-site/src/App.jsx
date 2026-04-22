@@ -14,8 +14,6 @@ const DOUBLE_CLICK_MS = 280;
 const DRAG_THRESHOLD_PX = 6;
 const EDGE_STAGE_PADDING = 28;
 const NODE_BOUNDS_TOP_OFFSET = 24;
-const GITHUB_REPO_OWNER = "0xthearchitect";
-const GITHUB_REPO_NAME = "beatrooter";
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
@@ -543,60 +541,6 @@ function buildEdgePath(sourceRect, targetRect, start, end, stageWidth, stageHeig
   );
 }
 
-function toTreeLines(paths, maxDepth = 2, maxChildren = 8) {
-  const root = { children: new Map(), file: false };
-
-  for (const path of paths) {
-    const parts = path.split("/").filter(Boolean);
-    let current = root;
-
-    parts.forEach((part, index) => {
-      const isFile = index === parts.length - 1 && !path.endsWith("/");
-      if (!current.children.has(part)) {
-        current.children.set(part, { children: new Map(), file: isFile });
-      }
-
-      const nextNode = current.children.get(part);
-      if (isFile) {
-        nextNode.file = true;
-      }
-      current = nextNode;
-    });
-  }
-
-  function orderedEntries(node) {
-    return [...node.children.entries()].sort((a, b) => {
-      const aNode = a[1];
-      const bNode = b[1];
-      if (aNode.file !== bNode.file) {
-        return aNode.file ? 1 : -1;
-      }
-      return a[0].localeCompare(b[0]);
-    });
-  }
-
-  function walk(node, prefix, depth) {
-    const entries = orderedEntries(node).slice(0, maxChildren);
-    const lines = [];
-
-    entries.forEach(([name, child], index) => {
-      const last = index === entries.length - 1;
-      const branch = last ? "└─ " : "├─ ";
-      const label = child.file ? name : `${name}/`;
-      lines.push(`${prefix}${branch}${label}`);
-
-      if (!child.file && depth < maxDepth) {
-        const nextPrefix = `${prefix}${last ? "   " : "│  "}`;
-        lines.push(...walk(child, nextPrefix, depth + 1));
-      }
-    });
-
-    return lines;
-  }
-
-  return walk(root, "", 0);
-}
-
 function Header({ page, onNavigate }) {
   const [stars, setStars] = useState(null);
 
@@ -694,90 +638,27 @@ function Header({ page, onNavigate }) {
   );
 }
 
-function ProjectStructurePanel() {
-  const [lines, setLines] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const visibleLines = lines.slice(0, 24);
-  const hasMoreLines = lines.length > visibleLines.length;
-
-  useEffect(() => {
-    let active = true;
-
-    async function loadTree(ref) {
-      const response = await fetch(`https://api.github.com/repos/${GITHUB_REPO_OWNER}/${GITHUB_REPO_NAME}/git/trees/${ref}?recursive=1`);
-      if (!response.ok) {
-        return null;
-      }
-
-      const data = await response.json();
-      if (!Array.isArray(data.tree)) {
-        return null;
-      }
-
-      return data.tree
-        .filter((entry) => entry.type === "blob" && typeof entry.path === "string")
-        .map((entry) => entry.path);
-    }
-
-    async function load() {
-      try {
-        const mainTree = await loadTree("main");
-        const paths = mainTree ?? await loadTree("master");
-
-        if (!active) {
-          return;
-        }
-
-        if (paths && paths.length > 0) {
-          setLines(toTreeLines(paths, 2, 9));
-        } else {
-          setLines([
-            "README.md",
-            "concept/",
-            "concept/beatrooter-site/",
-            "assets/",
-          ]);
-        }
-      } catch {
-        if (active) {
-          setLines([
-            "README.md",
-            "concept/",
-            "concept/beatrooter-site/",
-            "assets/",
-          ]);
-        }
-      } finally {
-        if (active) {
-          setLoading(false);
-        }
-      }
-    }
-
-    load();
-
-    return () => {
-      active = false;
-    };
-  }, []);
-
+function ContactUsSection() {
   return (
-    <section className="mx-auto mt-6 w-full max-w-[1280px] px-4 pb-12 lg:px-6">
-      <div className="rounded-[18px] border border-[#5a4740] bg-[#1f1a1a] shadow-[0_20px_60px_rgba(0,0,0,0.35)]">
-        <div className="border-b border-[#5a4740] px-5 py-3 text-[13px] font-semibold uppercase tracking-[0.06em] text-[#eaded9]">
-          Project Structure (GitHub)
+    <section className="relative z-20 mx-auto mt-2 w-full max-w-[1280px] px-4 pb-12 lg:px-6">
+      <div className="rounded-[18px] border border-[#8a4a66] bg-[#22191d] shadow-[0_20px_60px_rgba(0,0,0,0.35)]">
+        <div className="border-b border-[#8a4a66] px-5 py-3 text-[13px] font-semibold uppercase tracking-[0.06em] text-[#f0dce6]">
+          Contact Us
         </div>
-        <div className="px-5 py-4 font-mono text-[13px] leading-6 text-[#d8cbc6]">
-          {loading ? (
-            <div className="text-[#b6a29a]">Loading repository tree...</div>
-          ) : (
-            <>
-              {visibleLines.map((line) => (
-                <div key={line}>{line}</div>
-              ))}
-              {hasMoreLines && <div className="text-[#b6a29a]">... more files in repository</div>}
-            </>
-          )}
+        <div className="flex flex-col gap-4 px-5 py-5 text-[#e2d1da] md:flex-row md:items-center md:justify-between">
+          <div>
+            <div className="text-[18px] font-semibold text-[#f6e8ef]">Let&apos;s build the next node together.</div>
+            <div className="mt-1 text-[14px] text-[#d5bbc8]">Have an idea, feature request, or partnership in mind? Reach out to the Beatrooter team.</div>
+            <a href="mailto:contact@beatrooter.dev" className="mt-2 inline-block text-[14px] text-[#cf5b88] hover:text-[#e77faf]">
+              contact@beatrooter.dev
+            </a>
+          </div>
+          <button
+            type="button"
+            className="inline-flex h-[42px] items-center justify-center rounded-md border border-[#cf5b88] bg-[#b34c79] px-5 text-[14px] font-semibold text-white transition hover:bg-[#c35b88]"
+          >
+            + New Node
+          </button>
         </div>
       </div>
     </section>
@@ -1110,14 +991,14 @@ function FlowCanvas({ config, className = "", onNavigate }) {
 
 function HomePage({ onNavigate }) {
   return (
-    <>
+    <div className="mx-auto w-full max-w-[1320px]">
       <FlowCanvas
         config={HOME_CONFIG}
         className="mx-auto hidden h-[620px] max-w-[1280px] lg:block"
         onNavigate={onNavigate}
       />
-      <ProjectStructurePanel />
-    </>
+      <ContactUsSection />
+    </div>
   );
 }
 
