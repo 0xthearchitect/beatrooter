@@ -93,10 +93,11 @@ const HOME_CONFIG = {
     const compactSize = 126;
     
     // Generate random Y offsets for organic positioning
-    // Left node goes down, right node goes up, center stays moderate
-    const leftYOffset = Math.random() * 80 + 20;      // 20-100px down
-    const centerYOffset = (Math.random() - 0.5) * 40;  // -20 to +20px
-    const rightYOffset = -(Math.random() * 60 + 15);   // -15 to -75px up
+    // Side nodes (left & right) move freely up or down
+    // Center node stays almost fixed for visual anchor
+    const leftYOffset = (Math.random() - 0.5) * 120 - 20;   // -80 to +40px (more range, can go both ways)
+    const centerYOffset = (Math.random() - 0.5) * 12;       // -6 to +6px (barely moves)
+    const rightYOffset = (Math.random() - 0.5) * 120 + 20;  // -40 to +80px (more range, can go both ways)
     
     return {
       about: { x: sideOffset, y: 250 + leftYOffset, expanded: false },
