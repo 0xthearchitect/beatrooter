@@ -620,17 +620,17 @@ function Header({ page, onNavigate }) {
             href="https://github.com/0xthearchitect/beatrooter"
             target="_blank"
             rel="noreferrer"
-            className="group relative inline-flex items-center overflow-hidden rounded-[9px] border border-[#6f7286] bg-[linear-gradient(180deg,#2a2f3f_0%,#222837_100%)] text-[22px] font-semibold text-[#e7e9f3] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-[#8a8fa6]"
+            className="group relative inline-flex items-center overflow-hidden rounded-[9px] border border-[#8e4a69] bg-[linear-gradient(180deg,#33212c_0%,#271a24_100%)] text-[16px] font-semibold text-[#f2e6ec] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] transition hover:border-[#b35a83]"
             aria-label="Beatrooter stars on GitHub"
           >
-            <span className="flex h-[36px] items-center px-3 text-[#f0f2fa]">
+            <span className="flex h-[34px] items-center px-3 text-[#f6edf2]">
               <GitHubMark />
             </span>
-            <span className="h-[18px] w-px bg-[#5d6278]" />
-            <span className="flex h-[36px] items-center px-3 text-[22px] leading-none tracking-tight">
+            <span className="h-[16px] w-px bg-[#754057]" />
+            <span className="flex h-[34px] items-center px-3 text-[18px] leading-none tracking-tight">
               {formattedStars}
             </span>
-            <span className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[#6f8dff]/55" />
+            <span className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[#cf5b88]/55" />
           </a>
         </div>
       </div>
