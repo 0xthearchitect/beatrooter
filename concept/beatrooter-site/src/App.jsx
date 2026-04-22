@@ -95,14 +95,11 @@ const HOME_CONFIG = {
   getInitialNodes(stageWidth) {
     const sideOffset = clamp(stageWidth * 0.12, 116, 170);
     const compactSize = 126;
-    const minYPosition = 160; // Plenty of breathing room from header
+    const minYPosition = 160;
     
-    // Generate random Y offsets for organic positioning
-    // Side nodes (left & right) move freely up or down
-    // Center node stays almost fixed for visual anchor
-    const leftYOffset = (Math.random() - 0.5) * 250;   // -80 to +40px (more range, can go both ways)
-    const centerYOffset = (Math.random() - 0.5) * 12;       // -6 to +6px (barely moves)
-    const rightYOffset = (Math.random() - 0.5) * 250;  // -40 to +80px (more range, can go both ways)
+    const leftYOffset = (Math.random() - 0.5) * 250;
+    const centerYOffset = (Math.random() - 0.5) * 64;
+    const rightYOffset = (Math.random() - 0.5) * 250;
     
     return {
       about: { x: sideOffset, y: clamp(250 + leftYOffset, minYPosition, 620), expanded: false },
