@@ -91,6 +91,7 @@ const HOME_CONFIG = {
   getInitialNodes(stageWidth) {
     const sideOffset = clamp(stageWidth * 0.12, 116, 170);
     const compactSize = 126;
+    const minYPosition = 140; // Prevent nodes from overlapping with header/hero
     
     // Generate random Y offsets for organic positioning
     // Side nodes (left & right) move freely up or down
@@ -100,9 +101,9 @@ const HOME_CONFIG = {
     const rightYOffset = (Math.random() - 0.5) * 120 + 20;  // -40 to +80px (more range, can go both ways)
     
     return {
-      about: { x: sideOffset, y: 250 + leftYOffset, expanded: false },
-      team: { x: Math.round((stageWidth - compactSize) / 2), y: 250 + centerYOffset, expanded: false },
-      beatrooter: { x: stageWidth - sideOffset - compactSize, y: 244 + rightYOffset, expanded: false },
+      about: { x: sideOffset, y: clamp(250 + leftYOffset, minYPosition, 620), expanded: false },
+      team: { x: Math.round((stageWidth - compactSize) / 2), y: clamp(250 + centerYOffset, minYPosition, 620), expanded: false },
+      beatrooter: { x: stageWidth - sideOffset - compactSize, y: clamp(244 + rightYOffset, minYPosition, 620), expanded: false },
     };
   },
   edges: [
