@@ -665,7 +665,7 @@ function ContactUsSection() {
       </div>
 
       {showNodes && (
-        <div className="mt-8 flex flex-wrap items-center justify-center gap-8">
+        <div className="mt-18 flex flex-wrap items-center justify-center gap-28">
           <a
             href="https://www.patreon.com/"
             target="_blank"
@@ -673,7 +673,7 @@ function ContactUsSection() {
             aria-label="Patreon"
             className="group flex h-[126px] w-[126px] flex-col items-center justify-center rounded-[22px] border border-white/22 bg-[#232323] text-[#f0ddc8] shadow-[0_18px_34px_rgba(0,0,0,0.28)] transition hover:border-[#d3b083] hover:shadow-[0_24px_40px_rgba(0,0,0,0.35)]"
           >
-            <img src={patreonIcon} alt="Patreon" className="h-14 w-14 object-contain" draggable="false" />
+            <img src={patreonIcon} alt="Patreon" className="h-24 w-24 object-contain" draggable="false" />
           </a>
           <a
             href="https://github.com/0xthearchitect/beatrooter"
@@ -682,16 +682,16 @@ function ContactUsSection() {
             aria-label="GitHub"
             className="group flex h-[126px] w-[126px] flex-col items-center justify-center rounded-[22px] border border-white/22 bg-[#232323] text-[#e8d6ef] shadow-[0_18px_34px_rgba(0,0,0,0.28)] transition hover:border-[#9a7db6] hover:shadow-[0_24px_40px_rgba(0,0,0,0.35)]"
           >
-            <img src={githubIcon} alt="GitHub" className="h-14 w-14 object-contain" draggable="false" />
+            <img src={githubIcon} alt="GitHub" className="h-24 w-24 object-contain" draggable="false" />
           </a>
           <a
-            href="https://instagram.com/"
+            href="https://instagram.com/beatrooter"
             target="_blank"
             rel="noreferrer"
             aria-label="Instagram"
             className="group flex h-[126px] w-[126px] flex-col items-center justify-center rounded-[22px] border border-white/22 bg-[#232323] text-[#f2d3df] shadow-[0_18px_34px_rgba(0,0,0,0.28)] transition hover:border-[#cf7ea4] hover:shadow-[0_24px_40px_rgba(0,0,0,0.35)]"
           >
-            <img src={instagramIcon} alt="Instagram" className="h-14 w-14 object-contain" draggable="false" />
+            <img src={instagramIcon} alt="Instagram" className="h-24 w-24 object-contain" draggable="false" />
           </a>
         </div>
       )}
