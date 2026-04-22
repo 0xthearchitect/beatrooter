@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpRight, GitFork, SunMedium } from "lucide-react";
+import { ArrowUpRight, GitFork } from "lucide-react";
 import beetrootLogo from "./assets/beatroot_logo.svg";
 import nodeDoc from "./assets/Notes.svg";
 import nodeOutput from "./assets/node-output.svg";
@@ -23,9 +23,9 @@ function getCurrentPageFromHash() {
   return window.location.hash === "#team" ? "team" : "home";
 }
 
-function GitHubIcon() {
+function GitHubMark() {
   return (
-    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className="h-4.5 w-4.5">
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className="h-4 w-4">
       <path d="M12 .5a12 12 0 0 0-3.79 23.39c.6.11.82-.26.82-.58v-2.03c-3.34.73-4.04-1.41-4.04-1.41-.55-1.38-1.33-1.75-1.33-1.75-1.09-.75.08-.73.08-.73 1.2.09 1.84 1.22 1.84 1.22 1.08 1.82 2.82 1.29 3.5.99.11-.77.42-1.29.76-1.58-2.66-.3-5.47-1.31-5.47-5.86 0-1.3.47-2.35 1.23-3.18-.12-.3-.53-1.51.12-3.15 0 0 1.01-.32 3.3 1.21a11.6 11.6 0 0 1 6 0c2.29-1.53 3.3-1.2 3.3-1.2.65 1.63.24 2.84.12 3.14.77.83 1.23 1.89 1.23 3.18 0 4.56-2.81 5.56-5.49 5.85.43.37.82 1.1.82 2.22v3.29c0 .32.21.7.83.58A12 12 0 0 0 12 .5Z" />
     </svg>
   );
@@ -542,6 +542,39 @@ function buildEdgePath(sourceRect, targetRect, start, end, stageWidth, stageHeig
 }
 
 function Header({ page, onNavigate }) {
+  const [stars, setStars] = useState(null);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadStars() {
+      try {
+        const response = await fetch("https://api.github.com/repos/0xthearchitect/beatrooter");
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data = await response.json();
+        if (isMounted && typeof data.stargazers_count === "number") {
+          setStars(data.stargazers_count);
+        }
+      } catch {
+        // Keep fallback text when request fails.
+      }
+    }
+
+    loadStars();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const formattedStars = stars == null
+    ? "--"
+    : new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(stars);
+
   const nav = [
     { label: "Home", page: "home" },
     { label: "Team", page: "team" },
@@ -583,20 +616,22 @@ function Header({ page, onNavigate }) {
             })}
           </nav>
 
-          <div className="flex items-center gap-5 xl:gap-6">
-            <button type="button" aria-label="GitHub" className="text-[#e8e1e5] transition hover:text-white">
-              <GitHubIcon />
-            </button>
-            <button type="button" aria-label="Theme" className="text-[#e8e1e5] transition hover:text-white">
-              <SunMedium className="h-4.5 w-4.5" />
-            </button>
-            <button
-              type="button"
-              className="rounded-md bg-[#b34c79] px-5 py-2 text-[13px] font-semibold text-white transition hover:bg-[#c35b88]"
-            >
-              Get Started
-            </button>
-          </div>
+          <a
+            href="https://github.com/0xthearchitect/beatrooter"
+            target="_blank"
+            rel="noreferrer"
+            className="group relative inline-flex items-center overflow-hidden rounded-[9px] border border-[#6f7286] bg-[linear-gradient(180deg,#2a2f3f_0%,#222837_100%)] text-[22px] font-semibold text-[#e7e9f3] shadow-[inset_0_1px_0_rgba(255,255,255,0.08)] transition hover:border-[#8a8fa6]"
+            aria-label="Beatrooter stars on GitHub"
+          >
+            <span className="flex h-[36px] items-center px-3 text-[#f0f2fa]">
+              <GitHubMark />
+            </span>
+            <span className="h-[18px] w-px bg-[#5d6278]" />
+            <span className="flex h-[36px] items-center px-3 text-[22px] leading-none tracking-tight">
+              {formattedStars}
+            </span>
+            <span className="pointer-events-none absolute inset-x-0 bottom-0 h-px bg-[#6f8dff]/55" />
+          </a>
         </div>
       </div>
     </header>
