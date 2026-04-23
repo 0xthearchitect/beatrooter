@@ -640,6 +640,25 @@ function Header({ page, onNavigate }) {
 
 function ContactUsSection() {
   const [showNodes, setShowNodes] = useState(false);
+  const socialNodesRef = useRef(null);
+
+  useEffect(() => {
+    if (!showNodes || !socialNodesRef.current) {
+      return;
+    }
+
+    const rafId = window.requestAnimationFrame(() => {
+      const nodesTop = socialNodesRef.current.getBoundingClientRect().top + window.scrollY;
+      window.scrollTo({
+        top: Math.max(nodesTop - 110, 0),
+        behavior: "smooth",
+      });
+    });
+
+    return () => {
+      window.cancelAnimationFrame(rafId);
+    };
+  }, [showNodes]);
 
   return (
     <section className="relative z-20 mx-auto mt-28 w-full max-w-[1280px] px-4 pb-14 text-center lg:px-6">
@@ -662,7 +681,7 @@ function ContactUsSection() {
       </div>
 
       {showNodes && (
-        <div className="mt-18 flex flex-wrap items-center justify-center gap-28">
+        <div ref={socialNodesRef} className="mt-18 flex flex-wrap items-center justify-center gap-28">
           <a
             href="https://www.patreon.com/"
             target="_blank"
